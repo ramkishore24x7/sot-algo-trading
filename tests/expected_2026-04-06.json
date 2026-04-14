@@ -1,0 +1,64 @@
+{
+  "98998": {
+    "intent": "NEW_SIGNAL",
+    "instrument": "NIFTY",
+    "sl": 180
+  },
+  "99006": {
+    "intent": "UPDATE_SL",
+    "sl_at_cost": true
+  },
+  "99007": {
+    "intent": "UPDATE_SL",
+    "sl": 190
+  },
+  "99008": {
+    "intent": "NEW_SIGNAL",
+    "instrument": "NIFTY",
+    "sl": 150
+  },
+  "99009": {
+    "intent": "NEW_SIGNAL",
+    "instrument": "NIFTY",
+    "sl_deferred": true
+  },
+  "99011": {
+    "intent": "NEW_SIGNAL",
+    "instrument": "SENSEX",
+    "sl": 495
+  },
+  "99023": {
+    "intent": "UPDATE_SL",
+    "sl": 515
+  },
+  "99042": {
+    "intent": "UPDATE_SL",
+    "sl": 208
+  },
+  "99044": {
+    "intent": "PARTIAL_EXIT"
+  },
+  "99053": {
+    "intent": "REENTER"
+  },
+  "99054": {
+    "intent": "NEW_SIGNAL",
+    "instrument": "SENSEX",
+    "sl": 395
+  },
+  "99066": {
+    "intent": "UPDATE_SL",
+    "sl_at_cost": true,
+    "sl": 415
+  },
+  "99068": {
+    "intent": "NEW_SIGNAL",
+    "instrument": "NIFTY",
+    "sl": 135
+  },
+  "99076": {
+    "intent": "UPDATE_SL",
+    "sl_at_cost": true,
+    "sl": 147
+  }
+}
