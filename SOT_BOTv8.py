@@ -84,6 +84,7 @@ parser.add_argument('-efpa', type=str2bool, nargs='?', const=True, default=False
 parser.add_argument('-oca', type=str2bool, nargs='?', const=True, default=False, help='is On Crossing Above')
 parser.add_argument('-es', type=str2int_or_none, nargs='?', default=None, help='Exit Strategy')
 parser.add_argument('-spot', type=int_or_false, nargs='?', default=False, help='Spot Price')
+parser.add_argument('-slc', action='store_true', default=False, help='SL at cost: after T1 set SL to fill price (break-even) and do not trail further')
 
 args = parser.parse_args()
 
@@ -117,6 +118,7 @@ onCrossingAbove = args.oca
 buildNumber = args.b
 spot = args.spot
 exit_strategy = args.es
+sl_at_cost = args.slc
 
 re_entered = False
 re_entry = False
@@ -214,7 +216,7 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 logger.addHandler(file_handler)
 
-position = Position(instrument=stock_option,ce_pe=PE_CE,strike=stock_option,entry_price=entry_price,stoploss=stop_loss,target1=target1,target2=target2,target3=target3,isBreakoutStrategy=isBreakoutStrategy,enterFewPointsAbove=enterFewPointsAbove,onCrossingAbove=onCrossingAbove,spot=spot,exit_strategy=exit_strategy)
+position = Position(instrument=stock_option,ce_pe=PE_CE,strike=stock_option,entry_price=entry_price,stoploss=stop_loss,target1=target1,target2=target2,target3=target3,isBreakoutStrategy=isBreakoutStrategy,enterFewPointsAbove=enterFewPointsAbove,onCrossingAbove=onCrossingAbove,spot=spot,exit_strategy=exit_strategy,sl_at_cost=sl_at_cost)
 
 logger.debug(f"[{bot_name}_LIVE]: Checking For Position:")
 logger.info(pprint.pformat(position.__dict__))
@@ -555,6 +557,26 @@ class TradeHandler:
         send_order_placement_erros("ENTER POSITION", trade_manager.enter_position(position, self.current_entry_price))
         entered_trade = True
 
+        # Late-entry guard: if we're already above T1 at fill time (e.g. re-entry
+        # after a spike), skip T1 booking and go straight to SL-at-cost.
+        # Selling at T1 when fill > T1 would be booking at a loss.
+        if onCrossingAbove and targets_list and self.current_entry_price > targets_list[0]:
+            _booked[0] = True
+            self._soldAtTarget1 = True
+            sl_anchor = entry_price  # original breakout trigger level, not fill
+            self.stop_loss = sl_anchor if precise_trailing else sl_anchor + 3
+            if onCrossingAbove:
+                self.stop_loss -= 2
+            self.lazy_stoploss = self.stop_loss
+            logger.critical(
+                f"Late entry: fill {self.current_entry_price}/- > T1 {targets_list[0]}/-. "
+                f"Skipping T1 booking. All lots ride to T2+. SL → {self.stop_loss}/-"
+            )
+            asyncio.run(send_message(
+                f"⚡ Late entry at {self.current_entry_price}/- (above T1={targets_list[0]}). "
+                f"Skipping T1, riding to T2+. SL={self.stop_loss}/-"
+            ))
+
         logger.warning(f"almost_target1: {self.almost_target1} i.e {entry_price + self.almost_target1}")
         logger.warning(f"almost_target2: {self.almost_target2} i.e {target1 + self.almost_target2}")
         logger.warning(f"almost_target3: {self.almost_target3} i.e {target2 + self.almost_target3}")
@@ -655,12 +677,19 @@ class TradeHandler:
 
             # almost targets — not averaged
             elif play_safe and round(cmp) >= self.avg_price + self.almost_target1 and not self._isAveraged and self.stop_loss < self.avg_price:
-                # NEAR trade: anchor SL at range-low (second_entry_price), not the fill price
-                sl_anchor = (second_entry_price
-                             if second_entry_price is not None and not isBreakoutStrategy
-                             else self.avg_price)
+                # sl_at_cost: always anchor at avg_price (cost)
+                # NEAR: anchor at range-low; ABOVE: anchor at avg_price
+                if sl_at_cost:
+                    sl_anchor = self.avg_price
+                    sl_label = "cost (sl_at_cost mode)"
+                elif second_entry_price is not None and not isBreakoutStrategy:
+                    sl_anchor = second_entry_price
+                    sl_label = "range-low"
+                else:
+                    sl_anchor = self.avg_price
+                    sl_label = "Breakeven"
                 self.stop_loss = sl_anchor if precise_trailing else sl_anchor + 3
-                logger.critical(f"Trailed stop_loss to {'range-low' if second_entry_price and not isBreakoutStrategy else 'Breakeven'} ({sl_anchor}) as CMP >= avg_price + {self.almost_target1}.  CMP: {cmp}/- ; Average Price: {self.avg_price}/- ; Next Target: {target1}/- ; stop_loss: {self.stop_loss}/-")
+                logger.critical(f"Trailed stop_loss to {sl_label} ({sl_anchor}) as CMP >= avg_price + {self.almost_target1}.  CMP: {cmp}/- ; Average Price: {self.avg_price}/- ; Next Target: {target1}/- ; stop_loss: {self.stop_loss}/-")
             elif play_safe and round(cmp) >= target1 + self.almost_target2 and not self._isAveraged and self.stop_loss < target1:
                 self.stop_loss = target1 if precise_trailing else target1 + 3
                 logger.critical(f"Trailed stop_loss to Target1 as CMP >= avg_price + {self.almost_target2} and position is not averaged.  CMP: {cmp}/- ; Average Price: {self.avg_price}/- ; Next Target: {target3}/- ; stop_loss: {self.stop_loss}/-")
@@ -693,20 +722,31 @@ class TradeHandler:
                     asyncio.run(send_message(f"{smileys} {gain} Points{'!' if is_last else '...'}"))
 
                     if i == 0:
-                        # First target hit: SL → range-low (NEAR) or avg_price (ABOVE)
-                        sl_anchor = (second_entry_price
-                                     if second_entry_price is not None and not isBreakoutStrategy
-                                     else self.avg_price)
+                        # First target hit: SL → cost/break-even (sl_at_cost),
+                        # range-low (NEAR), or entry_price (ABOVE)
+                        if sl_at_cost:
+                            sl_anchor = self.avg_price
+                            sl_label = "cost (sl_at_cost mode)"
+                        elif second_entry_price is not None and not isBreakoutStrategy:
+                            sl_anchor = second_entry_price
+                            sl_label = "range-low"
+                        else:
+                            sl_anchor = self.avg_price
+                            sl_label = "breakeven"
                         self.stop_loss = sl_anchor if precise_trailing else sl_anchor + 3
                         if onCrossingAbove:
                             self.stop_loss -= 2
                         self.lazy_stoploss = self.stop_loss
-                        logger.critical(f"T1 hit — SL → {sl_anchor} ({'range-low' if second_entry_price and not isBreakoutStrategy else 'breakeven'}). CMP: {cmp}/- SL: {self.stop_loss}/-")
+                        logger.critical(f"T1 hit — SL → {sl_anchor} ({sl_label}). CMP: {cmp}/- SL: {self.stop_loss}/-")
                     elif not is_last:
-                        # Intermediate target hit: SL → previous target
-                        prev_tgt = targets_list[i - 1]
-                        self.stop_loss = prev_tgt if precise_trailing else prev_tgt + 3
-                        logger.critical(f"T{i+1} hit — SL → T{i} ({prev_tgt}). CMP: {cmp}/- SL: {self.stop_loss}/-")
+                        if sl_at_cost:
+                            # sl_at_cost: keep SL at cost, don't trail up
+                            logger.critical(f"T{i+1} hit — SL stays at cost ({self.stop_loss}) [sl_at_cost mode]. CMP: {cmp}/-")
+                        else:
+                            # Normal trailing: SL → previous target
+                            prev_tgt = targets_list[i - 1]
+                            self.stop_loss = prev_tgt if precise_trailing else prev_tgt + 3
+                            logger.critical(f"T{i+1} hit — SL → T{i} ({prev_tgt}). CMP: {cmp}/- SL: {self.stop_loss}/-")
 
                     if is_last:
                         logger.critical(f"Last target (T{i+1}={tgt}) hit! Closed at {cmp}/- ; Highest LTP: {self.ltpHigh}/-")

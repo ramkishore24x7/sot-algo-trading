@@ -3,7 +3,7 @@ import re
 
 
 class Position():
-    def __init__(self,strike,entry_price,stoploss,target1,target2,target3,isBreakoutStrategy,enterFewPointsAbove,second_entry_price=None,onCrossingAbove=False,instrument=None,ce_pe=None,spot=None,exit_strategy=None,num_targets=3,targets=None) -> None:
+    def __init__(self,strike,entry_price,stoploss,target1,target2,target3,isBreakoutStrategy,enterFewPointsAbove,second_entry_price=None,onCrossingAbove=False,instrument=None,ce_pe=None,spot=None,exit_strategy=None,num_targets=3,targets=None,sl_at_cost=False) -> None:
         self.instrument = instrument
         self.ce_pe = ce_pe
         self.strike = strike
@@ -27,6 +27,7 @@ class Position():
         else:
             self.targets = [int(target1), int(target2), int(target3)]
         self.num_targets = max(len(self.targets), 2)
+        self.sl_at_cost = sl_at_cost
         self.isAveraged = False
         if ":" not in instrument:
             self.lot_size = Config.lot_size_map.get(instrument, None)

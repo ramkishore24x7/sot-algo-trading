@@ -325,6 +325,11 @@ def grep_exit_strategy(message):
     else:
         return None
 
+def grep_sl_at_cost(message):
+    """Detect 'SL at cost' / 'keep SL at cost' / 'SL cost' instruction."""
+    return bool(re.search(r'\bsl\s+at\s+cost\b|\bsl\s+cost\b|\bkeep\s+sl\s+at\s+cost\b',
+                          message, flags=re.IGNORECASE))
+
 def grep_additional_points(message):
     regex_pattern = r"(enter above \d{1,2}-\d{1,2} points|enter \d{1,2}-\d{1,2} points above|above \d{1,2}-\d{1,2} points)"
     additional_points = True if re.search(regex_pattern, message, flags=re.IGNORECASE) else False
@@ -341,7 +346,7 @@ def generate_signal(message):
     TARGET 420/430/460+++ 
     SL - 380
     """
-    signal, target, sl, additional_points, spot, exit_strategy = "", "", "", False, None, None
+    signal, target, sl, additional_points, spot, exit_strategy, sl_at_cost = "", "", "", False, None, None, False
     if re.search(buy_regex_pattern, message, flags=re.IGNORECASE):
         signal = grep_signal(message)
 
@@ -353,19 +358,21 @@ def generate_signal(message):
 
     if re.search(spot_regex_pattern, message, flags=re.IGNORECASE):
         spot = grep_spot(message)
-    
+
     if re.search(exit_strategy_regex_pattern, message, flags=re.IGNORECASE):
         exit_strategy = grep_exit_strategy(message)
 
     if re.search('enter.*', message, flags=re.IGNORECASE) or re.search('entry.*', message, flags=re.IGNORECASE) or "WICK" in message.upper():
         additional_points = grep_additional_points(message)
 
-    return signal, target, sl, additional_points, spot, exit_strategy
+    sl_at_cost = grep_sl_at_cost(message)
+
+    return signal, target, sl, additional_points, spot, exit_strategy, sl_at_cost
 
 
 def build_position_data(message):
     global brokenSignal, brokenTargets, brokenSL
-    signal, targets, sl, additional_points, spot, exit_strategy = generate_signal(message)
+    signal, targets, sl, additional_points, spot, exit_strategy, sl_at_cost = generate_signal(message)
     
     if signal and targets and sl:
         # if "LEVEL" in message and not message.upper().startswith("SOT_BOT"):
@@ -406,7 +413,7 @@ def build_position_data(message):
             target3 = target2 + (target2 - target1)
             all_targets.append(target3)
         brokenSignal, brokenTargets, brokenSL = None, None, None
-        return Position(instrument=instrument,strike=strike,ce_pe=PE_CE,entry_price=entry_price,second_entry_price=second_entry_price,stoploss=stoploss,target1=target1,target2=target2,target3=target3,isBreakoutStrategy=isBreakoutStrategy,enterFewPointsAbove=additional_points,spot=spot,exit_strategy=exit_strategy,targets=all_targets)
+        return Position(instrument=instrument,strike=strike,ce_pe=PE_CE,entry_price=entry_price,second_entry_price=second_entry_price,stoploss=stoploss,target1=target1,target2=target2,target3=target3,isBreakoutStrategy=isBreakoutStrategy,enterFewPointsAbove=additional_points,spot=spot,exit_strategy=exit_strategy,targets=all_targets,sl_at_cost=sl_at_cost)
     elif signal and not targets and not sl and ("CE" in signal or "PE" in signal):
         if not message.startswith("INSTRUMENT:"):
             asyncio.run(send_message(f"SOT_BREACH: Missing Target and SL.\n\nSOT_MESSAGE:\n{message}"))
@@ -502,12 +509,13 @@ def trigger_SOT_BOT(postion_data: Position):
     try:
         cmd = None
         targets_str = ",".join(str(t) for t in postion_data.targets)
+        slc_flag = " -slc" if getattr(postion_data, 'sl_at_cost', False) else ""
         if postion_data.entry_price != 0 and not postion_data.isBreakoutStrategy:
-            cmd = bot  + " -i=" + postion_data.instrument+" -s="+str(postion_data.strike)+" -cepe="+str(postion_data.ce_pe)+" -bo="+str(postion_data.isBreakoutStrategy)+" -e="+str(postion_data.entry_price)+" -t1="+str(postion_data.target1)+" -t2="+str(postion_data.target2)+" -t3="+str(postion_data.target3)+" -sl="+str(postion_data.stoploss)+" -efpa="+str(postion_data.enterFewPointsAbove)+" -oca="+str(postion_data.onCrossingAbove) + " -e2="+str(postion_data.second_entry_price)+" -targets="+targets_str
+            cmd = bot  + " -i=" + postion_data.instrument+" -s="+str(postion_data.strike)+" -cepe="+str(postion_data.ce_pe)+" -bo="+str(postion_data.isBreakoutStrategy)+" -e="+str(postion_data.entry_price)+" -t1="+str(postion_data.target1)+" -t2="+str(postion_data.target2)+" -t3="+str(postion_data.target3)+" -sl="+str(postion_data.stoploss)+" -efpa="+str(postion_data.enterFewPointsAbove)+" -oca="+str(postion_data.onCrossingAbove) + " -e2="+str(postion_data.second_entry_price)+" -targets="+targets_str+slc_flag
             logger.info(f"[SOT_BOT]: {cmd}")
             pyperclip.copy(cmd)
         elif postion_data.isBreakoutStrategy:
-            cmd = bot  + " -i=" + postion_data.instrument+" -s="+str(postion_data.strike)+" -cepe="+str(postion_data.ce_pe)+" -bo="+str(not postion_data.isBreakoutStrategy)+" -e="+str(postion_data.entry_price)+" -t1="+str(postion_data.target1)+" -t2="+str(postion_data.target2)+" -t3="+str(postion_data.target3)+" -sl="+str(postion_data.stoploss)+" -efpa="+str(postion_data.enterFewPointsAbove)+" -oca="+str(not postion_data.onCrossingAbove) + " -e2="+str(postion_data.second_entry_price)+" -targets="+targets_str
+            cmd = bot  + " -i=" + postion_data.instrument+" -s="+str(postion_data.strike)+" -cepe="+str(postion_data.ce_pe)+" -bo="+str(not postion_data.isBreakoutStrategy)+" -e="+str(postion_data.entry_price)+" -t1="+str(postion_data.target1)+" -t2="+str(postion_data.target2)+" -t3="+str(postion_data.target3)+" -sl="+str(postion_data.stoploss)+" -efpa="+str(postion_data.enterFewPointsAbove)+" -oca="+str(not postion_data.onCrossingAbove) + " -e2="+str(postion_data.second_entry_price)+" -targets="+targets_str+slc_flag
             if postion_data.spot:
                cmd = cmd + " -spot=" + str(postion_data.spot)
             if postion_data.exit_strategy:
@@ -1418,6 +1426,7 @@ def _position_from_llm(signal) -> Position:
         spot=None,
         exit_strategy=None,
         targets=all_targets,
+        sl_at_cost=getattr(signal, 'sl_at_cost', False),
     )
 
 

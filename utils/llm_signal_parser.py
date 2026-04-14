@@ -62,6 +62,7 @@ class ParsedSignal:
     targets: list = field(default_factory=list)
     sl: Optional[int] = None
     sl_deferred: bool = False
+    sl_at_cost: bool = False
     wait_for_price: bool = True
     notes: str = ""
     raw_message: str = ""
@@ -97,6 +98,8 @@ class ParsedSignal:
             parts.append(f"SL={self.sl}")
         elif self.sl_deferred:
             parts.append("SL=DEFERRED")
+        if self.sl_at_cost:
+            parts.append("SL@COST")
         if self.notes:
             parts.append(f"[{self.notes}]")
         return " | ".join(parts)
@@ -243,6 +246,7 @@ Older/uppercase format (same logic, just all caps and BUY prefix):
 ## Common follow-up patterns and their intents
 - "Re-enter", "re-enter same", "add more near X" → REENTER
 - "Sl updated to 210", "sl now 195", "sl 185" as standalone → UPDATE_SL
+- "Sl at cost 165", "keep sl at cost 590", "sl at cost and hold" as standalone (mid-trade) → UPDATE_SL with sl_at_cost=true, sl=<the number if present>
 - "Ignore previous", "cancel", "don't take", "avoid this" → CANCEL
 - "Book X lots", "book 50%", "partial book here" → PARTIAL_EXIT
 - "Exit", "close all", "square off" → FULL_EXIT
@@ -257,6 +261,7 @@ Older/uppercase format (same logic, just all caps and BUY prefix):
 - If SL field contains text (not a number) → sl_deferred=true, sl=null
 - If message references "same", "previous", "re-enter" without instrument → REENTER
 - LEVEL keyword = buy only exactly at that price, don't chase
+- "SL at cost", "keep SL at cost", "sl cost" → sl_at_cost=true (mentor instructs to hold at break-even, don't trail SL to previous targets)
 - "Wait for price" / "(Wait for price)" footer = wait_for_price=true
 - Entry range "215-220" → entry_low=215, entry_high=220, strategy=RANGE
 - "at 205" (single exact price) → entry_low=205, entry_high=205, strategy=RANGE
@@ -294,6 +299,7 @@ JSON response:
   "targets": [<list of integers>],
   "sl": <integer or null>,
   "sl_deferred": <true|false>,
+  "sl_at_cost": <true|false>,
   "wait_for_price": <true|false>,
   "notes": "<one line explanation>"
 }}"""
@@ -381,6 +387,7 @@ class LLMSignalParser:
             targets=[int(t) for t in data.get("targets", []) if _int_or_none(t)],
             sl=_int_or_none(data.get("sl")),
             sl_deferred=bool(data.get("sl_deferred", False)),
+            sl_at_cost=bool(data.get("sl_at_cost", False)),
             wait_for_price=bool(data.get("wait_for_price", True)),
             notes=data.get("notes", ""),
             raw_message=text,
