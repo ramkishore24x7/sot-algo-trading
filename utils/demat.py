@@ -141,17 +141,33 @@ class Demat(Config):
             self.squareoff_at_first_target = True if not self.quantity >= self.position.lot_size * 3 else self.account.squareoff_at_first_target
         
     def get_sell_quantity_at_target1(self):
-        quantity_at_target1 = self.total_trading_quantity/2
-        quantity_at_target1 = quantity_at_target1 + self.position.lot_size/2
-        quantity_at_target1 = int(quantity_at_target1 - (quantity_at_target1%self.position.lot_size))
-        self.logger.debug(f"{self.account.name} Quantity to sell at Target1: {quantity_at_target1}")
+        # Sell 1/num_targets of total at T1 so more lots are preserved for later targets.
+        # e.g. 3 targets → 33%, 4 targets → 25%, 5 targets → 20%
+        n = self.position.num_targets
+        quantity_at_target1 = self.total_trading_quantity / n
+        quantity_at_target1 = quantity_at_target1 + self.position.lot_size / 2
+        quantity_at_target1 = int(quantity_at_target1 - (quantity_at_target1 % self.position.lot_size))
+        # never sell everything — keep at least one lot for the final target
+        quantity_at_target1 = min(quantity_at_target1, self.remaining_quantity - self.position.lot_size)
+        quantity_at_target1 = max(quantity_at_target1, self.position.lot_size)
+        self.logger.debug(f"{self.account.name} Quantity to sell at Target1 (1/{n} of total): {quantity_at_target1}")
         return quantity_at_target1
 
     def get_sell_quantity_at_target2(self):
-        quantity_at_target2 = self.total_trading_quantity/3
-        quantity_at_target2 = quantity_at_target2 + self.position.lot_size/2
-        quantity_at_target2 = int(quantity_at_target2 - (quantity_at_target2%self.position.lot_size))
-        self.logger.debug(f"{self.account.name} Quantity to sell at Target2: {quantity_at_target2}")
+        # If only one lot remains, skip T2 entirely — let T3 close it at the last target.
+        if self.remaining_quantity <= self.position.lot_size:
+            self.logger.debug(f"{self.account.name} Only 1 lot remaining at Target2 — deferring to Target3.")
+            return 0
+        # Sell 1/(num_targets-1) of REMAINING so the split stays proportional.
+        # e.g. after T1 (remaining ≈ (n-1)/n of total): sells another ~1/n of original
+        n = max(self.position.num_targets - 1, 1)
+        quantity_at_target2 = self.remaining_quantity / n
+        quantity_at_target2 = quantity_at_target2 + self.position.lot_size / 2
+        quantity_at_target2 = int(quantity_at_target2 - (quantity_at_target2 % self.position.lot_size))
+        # never sell everything — keep at least one lot for the final target
+        quantity_at_target2 = min(quantity_at_target2, self.remaining_quantity - self.position.lot_size)
+        quantity_at_target2 = max(quantity_at_target2, self.position.lot_size)
+        self.logger.debug(f"{self.account.name} Quantity to sell at Target2 (1/{n} of remaining): {quantity_at_target2}")
         return quantity_at_target2
 
     @retry(3,3)
@@ -245,6 +261,9 @@ class Demat(Config):
     def book_target2(self,position,price):
         if self.position_open and not self.account.await_next_target:
             sell_quantity_at_target2 = self.get_sell_quantity_at_target2()
+            if sell_quantity_at_target2 == 0:
+                self.logger.debug(f"{self.account.name} Skipping Target2 booking (0 qty) — holding for Target3.")
+                return None
             sellOrderID = self.placeOrderFyers(self.position.strike, "SELL", sell_quantity_at_target2, "MARKET", price, "regular")
             self.remaining_quantity = self.remaining_quantity - sell_quantity_at_target2
             self.position_open = True if self.remaining_quantity > 0 else False

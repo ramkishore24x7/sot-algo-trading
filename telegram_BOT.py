@@ -396,12 +396,14 @@ def build_position_data(message):
         # Always use the mentor's LAST stated target as T3 so remaining lots
         # hold as far as intended (handles 3, 4, 5, 6-target signals uniformly).
         # If only 2 targets given, extrapolate one step as before.
-        if len(targets) >= 4:
+        num_targets = len(targets) - 1  # targets[0] is the keyword ('Target'), rest are numbers
+        if num_targets >= 3:
             target3 = int(targets[-1])
         else:
+            num_targets = 3
             target3 = target2 + int(targets[2])-int(targets[1])
         brokenSignal, brokenTargets, brokenSL = None, None, None
-        return Position(instrument=instrument,strike=strike,ce_pe=PE_CE,entry_price=entry_price,second_entry_price=second_entry_price,stoploss=stoploss,target1=target1,target2=target2,target3=target3,isBreakoutStrategy=isBreakoutStrategy,enterFewPointsAbove=additional_points,spot=spot,exit_strategy=exit_strategy)
+        return Position(instrument=instrument,strike=strike,ce_pe=PE_CE,entry_price=entry_price,second_entry_price=second_entry_price,stoploss=stoploss,target1=target1,target2=target2,target3=target3,isBreakoutStrategy=isBreakoutStrategy,enterFewPointsAbove=additional_points,spot=spot,exit_strategy=exit_strategy,num_targets=num_targets)
     elif signal and not targets and not sl and ("CE" in signal or "PE" in signal):
         if not message.startswith("INSTRUMENT:"):
             asyncio.run(send_message(f"SOT_BREACH: Missing Target and SL.\n\nSOT_MESSAGE:\n{message}"))
@@ -1392,9 +1394,11 @@ def extract_nse_instrument(data):
 def _position_from_llm(signal) -> Position:
     """Convert a ParsedSignal to a Position object for SOT_BOT."""
     entry = signal.entry_high  # use the higher end of range as the working price
+    num_targets = max(len(signal.targets), 3)
     t1 = signal.targets[0] if len(signal.targets) > 0 else entry + 15
     t2 = signal.targets[1] if len(signal.targets) > 1 else t1 + 15
-    t3 = signal.targets[2] if len(signal.targets) > 2 else t2 + 15
+    # last target from signal — holds remaining lots as far as possible
+    t3 = signal.targets[-1] if len(signal.targets) > 2 else t2 + 15
     return Position(
         instrument=signal.instrument,
         strike=signal.strike,
@@ -1409,6 +1413,7 @@ def _position_from_llm(signal) -> Position:
         enterFewPointsAbove=False,
         spot=None,
         exit_strategy=None,
+        num_targets=num_targets,
     )
 
 

@@ -3,7 +3,7 @@ import re
 
 
 class Position():
-    def __init__(self,strike,entry_price,stoploss,target1,target2,target3,isBreakoutStrategy,enterFewPointsAbove,second_entry_price=None,onCrossingAbove=False,instrument=None,ce_pe=None,spot=None,exit_strategy=None) -> None:
+    def __init__(self,strike,entry_price,stoploss,target1,target2,target3,isBreakoutStrategy,enterFewPointsAbove,second_entry_price=None,onCrossingAbove=False,instrument=None,ce_pe=None,spot=None,exit_strategy=None,num_targets=3) -> None:
         self.instrument = instrument
         self.ce_pe = ce_pe
         self.strike = strike
@@ -20,6 +20,7 @@ class Position():
         self.onCrossingAbove = onCrossingAbove
         self.spot = spot
         self.exit_strategy = exit_strategy
+        self.num_targets = max(num_targets, 2)   # how many targets the mentor gave (2–6+)
         self.isAveraged = False
         if ":" not in instrument:
             self.lot_size = Config.lot_size_map.get(instrument, None)
