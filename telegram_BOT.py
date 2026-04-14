@@ -393,9 +393,11 @@ def build_position_data(message):
         stoploss = int(sl[1])
         target1 = int(targets[1])
         target2 = int(targets[2])
-        target3 = None
+        # Always use the mentor's LAST stated target as T3 so remaining lots
+        # hold as far as intended (handles 3, 4, 5, 6-target signals uniformly).
+        # If only 2 targets given, extrapolate one step as before.
         if len(targets) >= 4:
-            target3 = int(targets[3])
+            target3 = int(targets[-1])
         else:
             target3 = target2 + int(targets[2])-int(targets[1])
         brokenSignal, brokenTargets, brokenSL = None, None, None

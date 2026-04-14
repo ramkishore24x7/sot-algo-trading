@@ -647,8 +647,12 @@ class TradeHandler:
 
             # almost targets — not averaged
             elif play_safe and round(cmp) >= self.avg_price + self.almost_target1 and not self._isAveraged and self.stop_loss < self.avg_price:
-                self.stop_loss = self.avg_price if precise_trailing else self.avg_price + 3
-                logger.critical(f"Trailed stop_loss to Breakeven as CMP >= avg_price + {self.almost_target1} and position is not averaged.  CMP: {cmp}/- ; Average Price: {self.avg_price}/- ; Next Target: {target1}/- ; stop_loss: {self.stop_loss}/-")
+                # NEAR trade: anchor SL at range-low (second_entry_price), not the fill price
+                sl_anchor = (second_entry_price
+                             if second_entry_price is not None and not isBreakoutStrategy
+                             else self.avg_price)
+                self.stop_loss = sl_anchor if precise_trailing else sl_anchor + 3
+                logger.critical(f"Trailed stop_loss to {'range-low' if second_entry_price and not isBreakoutStrategy else 'Breakeven'} ({sl_anchor}) as CMP >= avg_price + {self.almost_target1}.  CMP: {cmp}/- ; Average Price: {self.avg_price}/- ; Next Target: {target1}/- ; stop_loss: {self.stop_loss}/-")
             elif play_safe and round(cmp) >= target1 + self.almost_target2 and not self._isAveraged and self.stop_loss < target1:
                 self.stop_loss = target1 if precise_trailing else target1 + 3
                 logger.critical(f"Trailed stop_loss to Target1 as CMP >= avg_price + {self.almost_target2} and position is not averaged.  CMP: {cmp}/- ; Average Price: {self.avg_price}/- ; Next Target: {target3}/- ; stop_loss: {self.stop_loss}/-")
@@ -667,12 +671,18 @@ class TradeHandler:
                 send_order_placement_erros("BOOK TARGET1", trade_manager.book_target1(position, cmp))
                 self._soldAtTarget1 = True
                 asyncio.run(send_message(f"😍 {gain} Points..."))
-                self.stop_loss = self.avg_price if precise_trailing else self.avg_price + 3
+                # For NEAR/range trades use second_entry_price (lower of range) as the
+                # SL-to-cost anchor — the support level, not the actual fill price.
+                # e.g. entered at 350 in a 340-350 range: SL moves to 340, not 350.
+                # For breakout or no-range trades fall back to avg_price as before.
+                sl_anchor = (second_entry_price
+                             if second_entry_price is not None and not isBreakoutStrategy
+                             else self.avg_price)
+                self.stop_loss = sl_anchor if precise_trailing else sl_anchor + 3
                 if onCrossingAbove:
                     self.stop_loss = self.stop_loss - 2
                 self.lazy_stoploss = self.stop_loss
-                logger.critical(f"Trailed lazy_stoploss to Breakeven/cost as cmp >= target1. CMP: {cmp}/- ; Average Price: {self.avg_price}/- ; Next Target: {target2}/- ; Stop-loss: {self.lazy_stoploss}/-")
-                logger.critical(f"Trailed Stop-loss to Breakeven as cmp >= target1. CMP: {cmp}/- ; Average Price: {self.avg_price}/- ; Next Target: {target2}/- ; Stop-loss: {self.stop_loss}/-")
+                logger.critical(f"Trailed SL to {'range-low' if second_entry_price and not isBreakoutStrategy else 'breakeven'} ({sl_anchor}) on T1 hit. CMP: {cmp}/- ; Avg: {self.avg_price}/- ; Next: {target2}/- ; SL: {self.stop_loss}/-")
 
             elif round(cmp) >= target2 - aggressive_trailing_points2 and self._soldAtTarget1 and not self._soldAtTarget2 and self.stop_loss_aggressive_trailing != target1:
                 self.stop_loss_aggressive_trailing = target1
