@@ -1,0 +1,46 @@
+# Copy this file to credentials.py and fill in your values
+# NEVER commit credentials.py
+
+# Lot sizes — update from https://public.fyers.in/sym_details/NSE_FO.csv
+LOT_SIZE_NIFTY = 65
+LOT_SIZE_MIDCPNIFTY = 120
+LOT_SIZE_BANKNIFTY = 30
+LOT_SIZE_FINNIFTY = 60
+LOT_SIZE_BAJFINANCE = 750
+LOT_SIZE_SENSEX = 20
+
+FREEZE_QUANTITY_BANKNIFTY = 900
+FREEZE_QUANTITY_NIFTY = 1170
+FREEZE_QUANTITY_MIDCPNIFTY = 4200
+FREEZE_QUANTITY_FINNIFTY = 1800
+FREEZE_QUANTITY_BAJFINANCE = 3750
+FREEZE_QUANTITY_SENSEX = 600
+
+HIGHEST_BANKNIFTY_OPTION_PRICE = 450
+HIGHEST_NIFTY_OPTION_PRICE = 250
+HIGHEST_MIDCPNIFTY_OPTION_PRICE = 250
+HIGHEST_FINNIFTY_OPTION_PRICE = 250
+HIGHEST_BAJFINANCE_OPTION_PRICE = 250
+HIGHEST_SENSEX_OPTION_PRICE = 1500
+
+DEMAT_1 = {
+    "account_name": "DEMAT_1",
+    "redirect_uri": "https://myapi.fyers.in/",
+    "client_id": "YOUR_CLIENT_ID",
+    "secret_key": "YOUR_SECRET_KEY",
+    "FY_ID": "YOUR_FY_ID",
+    "TOTP_KEY": "YOUR_TOTP_KEY",
+    "PIN": "YOUR_PIN"
+}
+
+DEMAT_2 = {
+    "account_name": "DEMAT_2",
+    "redirect_uri": "https://myapi.fyers.in/",
+    "client_id": "YOUR_CLIENT_ID",
+    "secret_key": "YOUR_SECRET_KEY",
+    "FY_ID": "YOUR_FY_ID",
+    "TOTP_KEY": "YOUR_TOTP_KEY",
+    "PIN": "YOUR_PIN"
+}
+
+DEMATS_FOR_LOGIN = [DEMAT_1, DEMAT_2]

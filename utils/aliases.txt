@@ -1,0 +1,251 @@
+alias o="open ."
+alias vs="code ."
+alias so="st ."
+alias p="cd /Users/ramkishore.gollakota/Documents/git/payments-automation"
+alias xm="/Users/ramkishore.gollakota/Documents/git/xm-ui-automation"
+#alias q="/Users/ramkishore.gollakota/Documents/git"
+alias sp="cd /Users/ramkishore.gollakota/Documents/git/ui-sample-project"
+alias uia="cd /Users/ramkishore.gollakota/Documents/git/gandalf-web-mobile"
+alias gp="cd /Users/ramkishore.gollakota/Documents/git/greenpay"
+alias ag="cp -r ./allure-report/history ./dist/examples/allure-results/ && allure generate ./dist/examples/allure-results/ -c && allure open"
+alias agp="cp -r ./dist/allure-report/history ./dist/allure-results/ && allure generate ./dist/allure-results/ -c && allure open"
+alias jenstart="brew services start jenkins"
+alias jenstop="brew services stop jenkins"
+alias jenstat="brew services status jenkins"
+alias jenrestart="brew services restart jenkins"
+alias arcd="gpl && arc diff"
+# alias gophers="cd /Users/ramkishore.gollakota/gopath/src/gitlab.myteksi.net/gophers/go"
+alias gophers="cd /Users/ramkishore.gollakota/Documents/git/gopath/src/gitlab.myteksi.net/gophers/go"
+alias unrar="./unrar x "
+alias bp="open -a 'Sublime Text' /Users/ramkishore.gollakota/.bash_profile"
+alias st="open -a 'Sublime Text' "
+alias zp="open -a 'Sublime Text' /Users/ramkishore.gollakota/.zshrc"
+# alias bp="open -a 'Sublime Text 2' /Users/ramkishore.gollakota/.bash_profile"
+# alias st="open -a 'Sublime Text 2' "
+alias ip="ifconfig | grep 'inet ' | grep -Fv 127.0.0.1 | awk '{print $2}'"
+alias gc="git clone "
+alias gst="git status "
+alias gcb="git branch | grep \*"
+alias br="git branch | awk '/\*/ { print $2; }'"
+alias b="git rev-parse --abbrev-ref HEAD"
+alias gnb="git checkout -b "
+alias ga="git ls-files --modified | xargs git add"
+alias gb="git branch "
+alias gf="git fetch"
+alias gfl="gf && gpl"
+alias gd="git diff "
+alias gcm="git commit -m "
+alias gco="git checkout "
+alias gclr="git checkout ."
+alias gcom="git checkout master"
+alias gcod="git checkout develop"
+alias gcoml="git checkout master; git pull"
+alias gcodl="git checkout develop; git pull"
+alias gpl="git pull"
+alias gpo="git push origin | b"
+alias gt="git tag "
+alias gpt="git push origin "
+alias gplod="git pull origin develop"
+alias gplom="git pull origin master"
+alias sbp="source ~/.bash_profile"
+alias sz="source ~/.zshrc"
+alias ram="echo 'Smiles0173#'| sudo -S "
+alias papp="/Users/ramkishore.gollakota/Documents/git/uiautomation"
+alias bb="/Users/ramkishore.gollakota/Documents/git"
+alias python='/usr/local/bin/python2'
+alias resetInteliJ=". /Users/ramkishore.gollakota/reset/trial-reset-intellij-macos.sh"
+alias rm-node-modules="rm -rf ./node_modules"
+alias rmy="rm -rf yarn.lock"
+alias yi="yarn install"
+alias yr="yarn report"
+alias refresh="rm-node-modules && yi"
+alias full-refresh="rm-node-modules && rmy && yi"
+alias ni="npm install"
+alias ntl="npm test local"
+alias dev="npm test dev"
+alias ncvzp="nc -vz $1"
+#alias uh="python -c 'import sys,uuid; sys.stdout.write(uuid.uuid4().hex)' | pbcopy && pbpaste && echo"
+#alias u="python -c 'import sys,uuid; sys.stdout.write(uuid.uuid4())' | pbcopy && pbpaste && echo"
+#alias u="python -c 'import uuid; print(uuid.uuid4())' | pbcopy && pbpaste && echo "
+#alias uh="python -c 'import uuid; print(uuid.uuid4().hex)' | pbcopy && pbpaste && echo "
+# alias btd="xcrun simctl list | awk -F'[()]' '/Booted/ { print $2 }' | head -n 1"
+btd() {
+xcrun simctl list | awk -F'[()]' '/Booted/ { print $2 }' | head -n 1
+}
+alias actual="ps aux | grep -i 'Appium' | grep -v grep | awk '{print $2}' | xargs kill"
+alias kapm="ps aux | grep -i 'Appium' | grep -v grep | awk -F 'ramkishore.gollakota ' '{ print $2 }' | awk -F' ' '{print $1}'"
+
+alias uh="uuidgen | tr -d '\n' | tr -d '\n' | tr '[:upper:]' '[:lower:]'  | pbcopy && pbpaste && echo"
+alias u="uuidgen | tr -d '\n-' | tr '[:upper:]' '[:lower:]' | pbcopy && pbpaste && echo"
+alias up="unset PREFIX"
+alias now="date +%s | pbcopy"
+# np(){
+# echo -e "2886"`date +%s` | tr -d '\n' | pbcopy
+# }
+# npi(){
+# echo -e "288"`date +%s` | tr -d '\n' | pbcopy
+# }
+np(){
+echo -e "2886"`date +%s` | tr -d '\n' | pbcopy
+}
+npi(){
+echo -e "288"`date +%s` | tr -d '\n' | pbcopy
+}
+
+pxs(){
+pax "65"$1
+}
+pxm(){
+pax "60"$1
+}
+pxp(){
+pax "63"$1
+}
+pxi(){
+pax "62"$1
+}
+pxv(){
+pax "84"$1
+}
+
+get_ios_build(){
+auth-aws
+# 5.147.0 == $1
+rm -rf /Users/ramkishore.gollakota/Desktop/apps/ios/**
+aws s3 cp  s3://mobile-beta-artifacts.grab.com/ios/archives/release/$1/ /Users/ramkishore.gollakota/Desktop/apps/ios/ --recursive
+mv /Users/ramkishore.gollakota/Desktop/apps/ios/Grab.zip /Users/ramkishore.gollakota/Desktop/apps/ios/pax.zip
+}
+# pax() { curl -X GET \
+# -H "Authorization: TOKEN GRAB_PAY_QA mfjZWOfJG65AC5GN2JBptFXAo-MHzoYfySlvTCWU3pn31D_jQ5HY1c5vDf2vPnh2-Bo7R6L5WiMtOoI0D3mxxA" \
+# -H "Content-Type: application/json" \
+# "https://grab-id-int.stg-myteksi.com/v1/automation/phone/otp" \
+# -d "{\"phoneNumber\": \"$1\"}"
+# }
+# pax() { curl -s -X GET -H "Authorization: TOKEN GRAB_PAY_QA mfjZWOfJG65AC5GN2JBptFXAo-MHzoYfySlvTCWU3pn31D_jQ5HY1c5vDf2vPnh2-Bo7R6L5WiMtOoI0D3mxxA" -H "Content-Type: application/json" "https://grab-id-int.stg-myteksi.com/v1/automation/phone/otp" -d "{\"phoneNumber\": \"$1\"}" | jq '.otp' | tr -d "\"" | tr -d "\n"| pbcopy | echo `pbpaste`}
+pax() { curl -s -X GET -H "Authorization: TOKEN GRAB_PAY_QA mfjZWOfJG65AC5GN2JBptFXAo-MHzoYfySlvTCWU3pn31D_jQ5HY1c5vDf2vPnh2-Bo7R6L5WiMtOoI0D3mxxA" -H "Content-Type: application/json" "https://grab-id-int.stg-myteksi.com/v1/automation/phone/otp" -d "{\"phoneNumber\": \"$1\"}" | jq '.otp' |   tr -d "\"" | tr -d "\n"| pbcopy}
+# 
+#alias pax="curl -H \"Authorization: TOKEN GRAB_PAY_QA mfjZWOfJG65AC5GN2JBptFXAo-MHzoYfySlvTCWU3pn31D_jQ5HY1c5vDf2vPnh2-Bo7R6L5WiMtOoI0D3mxxA\" \"https://grab-id-int.stg-myteksi.com/v1/automation/phone/otp\" -d '{"phoneNumber": \"$1\"}' -X GET -H \"Content-Type: application/json\""
+
+pph(){ pax '6328861588888874'}
+psg(){ pax '6528861588888847'}
+pdi(){ pax '622881588888843'}
+pvn(){ pax '8428861588888886'}
+pmy(){ pax '6028861588856562'}
+push() { ga; gcm "$1"; gpo; }
+# react-native
+function npm-refresh() {
+  watchman watch-del-all
+  rm -rf $TMPDIR/react-*
+  rm -rf $TMPDIR/haste-*
+  rm -rf $TMPDIR/metro-*
+  npm start -- --reset-cache
+}
+
+
+auth-aws(){
+token=`aws_mfa | awk '/Token:/ {print $2}'`
+printf $token | gomfa
+}
+
+pax_profile() { curl -X GET \
+  "https://grab-id-int.stg-myteksi.com/v1/users?phoneNumber=$1" \
+  -H 'Authorization: Token PASSENGER wXXFicSx6LoxLSjTuEm8SVbJgFntlJNznyO1SVpL4ICVPzoyDkr4Dc04O9wD2hYHiDmT4ma5h8nQH7YmO6bKVL9HPlQAyKfO35tAQ3ztAveL6wQjFIp9Zi5Vy87DOajsfgpwxVo77wq6lEEln8bkL4LbMjBoMHk7iKNaBSnpsLmv962FmK5YvaSNho1WswZSZAFII1rLfFCwyqWFLD1V9xLI7fPzjZNl0MCkThlhljA6wiD7iK069UrLqQNLQqC' \
+  -H 'Postman-Token: 262bf455-ae9c-4a9d-b0f3-c700f031f359' \
+  -H 'cache-control: no-cache'
+}
+#alias squash-all="!f(){ git reset $(git commit-tree HEAD^{tree} -m \"${1:-A new start}\");};f"
+poi_id(){
+  curl -s "http://poi-int.stg-myteksi.com/services/poi/reverse_geo?reference=$1,$2" | jq '.poi.id'
+}
+
+poi_add(){
+  curl -s "http://poi-int.stg-myteksi.com/services/poi/reverse_geo?reference=$1,$2" | jq '.result.address'
+}
+
+poi_country(){
+  curl -s "http://poi-int.stg-myteksi.com/services/poi/reverse_geo?reference=$1,$2" | jq '.result.address.country'
+}
+
+poi_country_code(){
+  curl -s "http://poi-int.stg-myteksi.com/services/poi/reverse_geo?reference=$1,$2" | jq '.result.address.country_code'
+}
+
+## In compliance to GDM  ##
+#GDMCOMMENT: Latitudes and longitudes used in this file are either sourced from GrabPlaces, GrabMaps, OSM or randomly created by the developer and are not obtained from other external sources.
+# "FI.C2.fc1c1f2dced818c00727a25f5bb65a40.IT_32D16FL9C9Y51"
+# "IT.0Y7TY49CPOYNP"
+# "IT.11TTUPB2DZZJF"
+# "IT.2EAF6BZMO3SUV"
+# "IT.3HSFMHB8KUVSJ"
+# "IT.3BO5WBNWDQA45"
+alias did="idevicesetlocation -- -6.211724 106.849327"
+alias dmy="idevicesetlocation 3.1579 101.7120"
+alias dph="idevicesetlocation 14.5995 120.9842"
+alias dth="idevicesetlocation 13.7062148 100.5446771"
+alias dsg="idevicesetlocation 1.3521 103.8198"
+alias dvn="idevicesetlocation 10.8231 106.6297"
+alias dsl="idevicesetlocation reset"
+
+# alias sid="set-simulator-location -c -6.211724 106.849327 -u $1"
+# alias smy="set-simulator-location -c 3.1579 101.7120 -u $1"
+# alias sph="set-simulator-location -c 14.5995 120.9842 -u $1"
+# alias sth="set-simulator-location -c 13.7062148 100.5446771 -u $1"
+# alias ssg="set-simulator-location -c 1.3521 103.8198 -u $1"
+# alias svn="set-simulator-location -c 10.8231 106.6297 -u $1"
+
+sid() {
+set-simulator-location -c -6.211724 106.849327 -u `btd`
+}
+smy() {
+set-simulator-location -c 3.1579 101.7120 -u `btd`
+}
+sph() {
+set-simulator-location -c 14.5995 120.9842 -u `btd`
+}
+sth() {
+set-simulator-location -c 13.7062148 100.5446771 -u `btd`
+}
+ssg() {
+set-simulator-location -c 1.3521 103.8198 -u `btd`
+}
+svn() {
+set-simulator-location -c 10.8231 106.6297 -u `btd`
+}
+
+alias aws_mfa="authenticator --account ramkishore.gollakota@grabtaxi.com --issuer \"Amazon Web Services\" --key \"J7CQJJZX6Q67AP5M44EEOMVGJIOMPSWXWM7H7LSSXZJHOC2QWZR2UCDI76YMG5V6\""
+alias uiac="find . -iname '*.yml' -exec tm4j create --config={} \;"
+
+alias sim-saf="xcrun simctl openurl booted $1"
+export TM4J_CLI_CONF=/Users/ramkishore.gollakota/tm4j.json
+export GRAB_GITLAB_ACCESS_TOKEN=-P9Mrsy9vyHqRn7Up5oM
+export PATH=$PATH:/Users/ramkishore.gollakota/Library/Android/sdk
+export PATH=$PATH:/Users/ramkishore.gollakota/Library/Android/sdk/platform-tools
+export PATH=$PATH:/Users/ramkishore.gollakota/Library/Android/sdk/tools
+export PATH=$PATH:/Users/ramkishore.gollakota/Library/Android/sdk/tools/bin
+export PATH=$PATH:/Users/ramkishore.gollakota/Library/Android/sdk/build-tools
+export PATH=$PATH:/Users/ramkishore.gollakota/Library/Android/sdk/build-tools/version
+export PATH=$PATH:/Users/ramkishore.gollakota/arcanist/arcanist/bin
+export ANDROID_HOME=/Users/ramkishore.gollakota/Library/Android/sdk
+export ANDROID_SDK=$ANDROID_HOME
+export JAVA_HOME=$(/usr/libexec/java_home)
+export PATH=$JAVA_HOME/bin:$PATH
+
+
+# alias a="clear && /Users/ramkishore.gollakota/Desktop/code/array && ls"
+# alias s="clear && /Users/ramkishore.gollakota/Desktop/code/linkedList && ls"
+# alias z="clear && /Users/ramkishore.gollakota/Desktop/code/strings && ls"
+# alias x="clear && /Users/ramkishore.gollakota/Desktop/code/stack && ls"
+# alias q="clear && /Users/ramkishore.gollakota/Desktop/code/trees && ls"
+# alias w="clear && /Users/ramkishore.gollakota/Desktop/code/recursion && ls"
+a(){ clear && cat ./**/$1
+}
+alias z="clear && cd /Users/ramkishore.gollakota/Desktop/code && tree"
+
+alias sot="python3 /Users/ramkishore.gollakota/Documents/algo/Fyers/SOT_Message.py"
+alias telegram_bot="python3 /Users/ramkishore.gollakota/Documents/algo/Fyers/telegram_bot.py"
+alias flogin="python3 /Users/ramkishore.gollakota/Documents/algo/Fyers/utils/Login.py"
+alias fws="python3 /Users/ramkishore.gollakota/Documents/algo/Fyers/utils/ws_fyers.py"
+alias scalp="python3 /Users/ramkishore.gollakota/Documents/algo/Fyers/scalp_ATM_TSL.py"
+alias sot_bot="python3 /Users/ramkishore.gollakota/Documents/algo/Fyers/SOT_BOT.py"
+alias banknifty_ws="python3 /Users/ramkishore.gollakota/Documents/algo/Fyers/utils/ws_fyers_BANKNIFTY.py"
+alias nifty_ws="python3 /Users/ramkishore.gollakota/Documents/algo/Fyers/utils/ws_fyers_NIFTY.py"

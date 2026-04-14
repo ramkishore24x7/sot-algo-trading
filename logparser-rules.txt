@@ -1,0 +1,5 @@
+critical /CRITICAL/
+error /ERROR/
+exception /EXCEPTION/
+info /INFO/
+warning /WARNING/
