@@ -87,7 +87,7 @@ log_file = Config.logger_path + "/" + name + "_" + name_suffix + ".log"
 buy_regex_pattern = 'buy.*|Bank.*|Nif.*|Fin.*|Baj.*|Nau.*|Sen.*'
 target_regex_pattern = 'Traget.*|Target.*|Tatget.*|Taget.*|Taret.*|TARGWT.*|Targst.*'
 sl_regex_pattern = 'SL.*'
-spot_regex_pattern = r'spot\s+(\d+)'
+spot_regex_pattern = r'spot\s*[:\-=]\s*(\d+)'
 exit_strategy_regex_pattern = r'strategy\s+(\d+)'
 
 # Create a logger
@@ -379,10 +379,17 @@ def build_position_data(message):
         PE_CE = signal[3]
         breakoutPattern = re.compile(r'\b(above|avove|abv|ave|abve)\b', re.IGNORECASE)
         isBreakoutStrategy = bool(breakoutPattern.findall(message))
-        entry_price = int(signal[-2]) if signal[-1] == "LEVEL" else int(signal[-1])
+        has_level_suffix = signal[-1].upper() == "LEVEL"
+        if has_level_suffix:
+            # e.g. ['Nifty','25500','ce','near','235','240','level']
+            #   or ['Sensex','73200','pe','above','575','level']
+            entry_price = int(signal[-2])
+        else:
+            entry_price = int(signal[-1])
         second_entry_price = None
         if not isBreakoutStrategy:
-            second_entry_price = int(signal[-2])
+            # For NEAR signals the lower bound sits one position further back when LEVEL is present
+            second_entry_price = int(signal[-3]) if has_level_suffix else int(signal[-2])
         stoploss = int(sl[1])
         target1 = int(targets[1])
         target2 = int(targets[2])
