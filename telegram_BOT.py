@@ -1441,6 +1441,24 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None):
 
     # ── NEW_SIGNAL ───────────────────────────────────────────────────────────
     if intent == "NEW_SIGNAL":
+        # If instrument is missing, try to inherit from the active signal
+        # whose price range is closest to the new entry.
+        # e.g. "Next entry near 160-165" after "Nifty 22600 PE near 190-195"
+        # → inherit NIFTY 22600 PE (same option at a lower premium).
+        if signal.instrument is None and signal.entry_high is not None:
+            active = llm_parser.get_active()
+            if active and active.instrument and active.entry_high is not None:
+                price_diff = abs((signal.entry_high or 0) - (active.entry_high or 0))
+                if price_diff <= 150:
+                    signal.instrument = active.instrument
+                    signal.strike     = active.strike
+                    signal.ce_pe      = active.ce_pe
+                    logger.info(
+                        f"[LLM] Inherited instrument from active signal: "
+                        f"{signal.instrument} {signal.strike} {signal.ce_pe} "
+                        f"(price diff={price_diff})"
+                    )
+
         if signal.sl_deferred:
             llm_parser.signal_pending(signal)
             await send_message(
@@ -1488,13 +1506,27 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None):
     elif intent == "REENTER":
         active = llm_parser.get_active()
         if active and active.is_actionable():
-            position = _position_from_llm(active)
-            logger.info(f"[LLM] REENTER → {active.summary()}")
+            # Merge any non-null fields from the REENTER signal over the
+            # stored active signal — handles "re-enter above 380" (changed
+            # entry) while falling back to original params for "re-enter same".
+            merged = active
+            if signal.entry_high is not None:
+                merged.entry_low  = signal.entry_low  or signal.entry_high
+                merged.entry_high = signal.entry_high
+            if signal.strategy is not None:
+                merged.strategy = signal.strategy
+            if signal.sl is not None:
+                merged.sl = signal.sl
+            if signal.targets:
+                merged.targets = signal.targets
+            position = _position_from_llm(merged)
+            logger.info(f"[LLM] REENTER → {merged.summary()}")
             await send_message(
-                f"🔁 LLM: Re-entry signal detected.\nRe-triggering: {active.summary()}",
+                f"🔁 LLM: Re-entry signal detected.\nRe-triggering: {merged.summary()}",
                 event_id=event_id, source_chat_id=sc
             )
             trigger_SOT_BOT(position)
+            llm_parser.signal_fired(merged)
         else:
             await send_message(
                 f"⚠️ LLM: Re-enter received but no active signal in context.\n\nRaw: {raw_message}",

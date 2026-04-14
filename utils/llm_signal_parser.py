@@ -39,7 +39,8 @@ _NOISE_PHRASE_RE = re.compile(
     r'send\s*screenshot|those\s*who\s*booked|'
     r'trades\s*taken\s*today|morning\s*jackpot\s*done|'
     r'watchlist|profit\s*screenshot|'
-    r'goood?\s*morning|wonderful\s*and\s*profitable)',
+    r'goood?\s*morning|wonderful\s*and\s*profitable|'
+    r'track\s+both\s+levels|watch\s+both\s+levels|keep\s+(an?\s+)?eye\s+on)',
     re.IGNORECASE
 )
 
@@ -249,9 +250,11 @@ Older/uppercase format (same logic, just all caps and BUY prefix):
 - "Sl at cost 165", "keep sl at cost 590", "sl at cost and hold" as standalone (mid-trade) → UPDATE_SL with sl_at_cost=true, sl=<the number if present>
 - "Ignore previous", "cancel", "don't take", "avoid this" → CANCEL
 - "Book X lots", "book 50%", "partial book here" → PARTIAL_EXIT
-- "Exit", "close all", "square off" → FULL_EXIT
+- "Remaining lot exit at 190", "exit at 190", "exit remaining at X" → UPDATE_SL with sl=X (mentor is setting a new exit/SL level, not asking to exit now)
+- "Exit", "close all", "square off" (without a specific price level) → FULL_EXIT
 - "395🚀🚀", "target done", "target was also done" → NOISE
 - "Good morning", "wonderful day", screenshots → NOISE
+- "Track both levels", "watch both", "keep eye on" → NOISE
 - "Sl - I will update" / "Sl - Will update" / "Sl - I will update on the basis of market move" → NEW_SIGNAL with sl_deferred=true
 - A message that gives just a number after a signal with deferred SL → SL_RESOLVED
 - Expiry mention like "12th june expiry" / "May exp" at the end of a signal → part of the signal notes, not a separate intent
@@ -259,7 +262,14 @@ Older/uppercase format (same logic, just all caps and BUY prefix):
 ## Important rules
 - Signals may or may not start with "BUY" — the instrument name alone is enough
 - If SL field contains text (not a number) → sl_deferred=true, sl=null
+- If a NEW_SIGNAL message has NO SL line at all (SL completely absent, not mentioned) → sl_deferred=true, sl=null
 - If message references "same", "previous", "re-enter" without instrument → REENTER
+- If a NEW_SIGNAL message has entry/targets but NO instrument name, infer instrument/strike/ce_pe
+  from the active signal in context whose entry price range is closest to the new entry.
+  e.g. active="Nifty 22600 PE near 190-195", new message="Next entry near 160-165 Target 175/190/..."
+  → inherit instrument=NIFTY, strike=22600, ce_pe=PE (same option, lower premium level)
+  Only inherit when the price range is plausibly the same contract (within ~150 pts of active entry).
+  If no active signal exists, leave instrument=null.
 - LEVEL keyword = buy only exactly at that price, don't chase
 - "SL at cost", "keep SL at cost", "sl cost" → sl_at_cost=true (mentor instructs to hold at break-even, don't trail SL to previous targets)
 - "Wait for price" / "(Wait for price)" footer = wait_for_price=true

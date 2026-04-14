@@ -267,12 +267,81 @@ class LLMParserTests(unittest.TestCase):
         sig = parser.parse("Re-enter same", msg_id=5)
         self.assertEqual(sig.intent, "REENTER")
 
-    def test_reenter_uses_active_context(self):
+    # ── Instrument inference from context ─────────────────────────────────────
+
+    def test_instrument_inferred_when_missing_and_price_close(self):
         """
-        When REENTER fires, the active signal from context should be usable
-        to re-build the position (via signal_fired + the active_signal dict).
+        'Next entry near 160-165 Target 175/190/...' has no instrument.
+        LLM should inherit NIFTY 22600 PE from active signal (entry 190-195).
+        Price diff = |165 - 195| = 30 → within 150 pt threshold.
         """
-        # Set up active signal first
+        parser = _make_parser({
+            "intent": "NEW_SIGNAL", "confidence": 0.85,
+            "instrument": None,   # <-- LLM didn't detect instrument
+            "strike": None, "ce_pe": None,
+            "strategy": "RANGE", "entry_low": 160, "entry_high": 165,
+            "targets": [175, 190, 200, 220, 235],
+            "sl": 150, "sl_deferred": False, "sl_at_cost": False,
+            "wait_for_price": False, "notes": "next entry, no instrument given",
+        })
+        # Set up active signal: Nifty 22600 PE near 190-195
+        active = ParsedSignal(
+            intent="NEW_SIGNAL", instrument="NIFTY", strike="22600", ce_pe="PE",
+            strategy="RANGE", entry_low=190, entry_high=195,
+            targets=[205, 220, 235, 250], sl=180,
+        )
+        parser.signal_fired(active)
+
+        sig = parser.parse("Next entry near 160-165 Target 175/190/200/220/235+ SI 150", msg_id=20)
+        # Parser returns the LLM output — instrument is still null here
+        # (inference happens in handle_llm_intent, not in parse())
+        self.assertEqual(sig.intent, "NEW_SIGNAL")
+        self.assertIsNone(sig.instrument)   # LLM didn't provide it
+        self.assertEqual(sig.entry_high, 165)
+        # Verify active signal is available for inference
+        restored = parser.get_active()
+        self.assertEqual(restored.instrument, "NIFTY")
+        price_diff = abs(sig.entry_high - restored.entry_high)
+        self.assertLessEqual(price_diff, 150, "Price diff should be within inheritance threshold")
+
+    def test_instrument_not_inferred_when_price_too_far(self):
+        """
+        New entry at 600 with active signal at 190 → price diff = 410 > 150.
+        Should NOT inherit instrument — different contract entirely.
+        """
+        active = ParsedSignal(
+            intent="NEW_SIGNAL", instrument="NIFTY", strike="22600", ce_pe="PE",
+            strategy="RANGE", entry_low=190, entry_high=195,
+            targets=[205, 220, 235], sl=180,
+        )
+        parser = _make_parser({})
+        parser.signal_fired(active)
+
+        restored = parser.get_active()
+        # Simulate: new signal entry_high=600, active entry_high=195
+        price_diff = abs(600 - restored.entry_high)
+        self.assertGreater(price_diff, 150, "Should NOT inherit for distant price range")
+
+    def test_instrument_not_inferred_when_no_active_signal(self):
+        """No active signal → instrument stays None, no crash."""
+        parser = _make_parser({
+            "intent": "NEW_SIGNAL", "confidence": 0.8,
+            "instrument": None, "strike": None, "ce_pe": None,
+            "strategy": "RANGE", "entry_low": 160, "entry_high": 165,
+            "targets": [175, 190, 200], "sl": 150,
+            "sl_deferred": False, "sl_at_cost": False,
+            "wait_for_price": False, "notes": "",
+        })
+        # No signal_fired() call — no active signal
+        sig = parser.parse("Next entry near 160-165 Target 175/190/200 SI 150", msg_id=21)
+        self.assertIsNone(sig.instrument)
+        self.assertIsNone(parser.get_active())
+
+    def test_reenter_same_preserves_active_signal(self):
+        """
+        'Re-enter same' — all REENTER fields are null.
+        get_active() should return the original signal unchanged.
+        """
         active = ParsedSignal(
             intent="NEW_SIGNAL", instrument="NIFTY", strike="25500", ce_pe="CE",
             strategy="RANGE", entry_low=215, entry_high=220,
@@ -285,13 +354,75 @@ class LLMParserTests(unittest.TestCase):
             "targets": [], "sl": None, "sl_deferred": False,
             "sl_at_cost": False, "wait_for_price": False, "notes": "",
         })
-        parser.signal_fired(active)   # mark as active
-        self.assertIsNotNone(parser.context.active_signal)
+        parser.signal_fired(active)
+        parser.parse("Re-enter same", msg_id=6)
 
-        sig = parser.parse("Re-enter same", msg_id=6)
-        self.assertEqual(sig.intent, "REENTER")
-        # active_signal context should still be set
-        self.assertIsNotNone(parser.context.active_signal)
+        restored = parser.get_active()
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored.entry_low, 215)
+        self.assertEqual(restored.entry_high, 220)
+        self.assertEqual(restored.strategy, "RANGE")
+
+    def test_reenter_modified_entry_stored_as_active(self):
+        """
+        'Re-enter above 380' — REENTER signal has new entry_high=380, BREAKOUT.
+        The active signal in context should have the original params intact
+        (the merge happens in handle_llm_intent, not in the parser itself).
+        get_active() still returns the original signal.
+        """
+        active = ParsedSignal(
+            intent="NEW_SIGNAL", instrument="NIFTY", strike="25500", ce_pe="CE",
+            strategy="RANGE", entry_low=215, entry_high=220,
+            targets=[230, 240, 255], sl=204, sl_deferred=False,
+        )
+        parser = _make_parser({
+            "intent": "REENTER", "confidence": 0.90,
+            "instrument": None, "strike": None, "ce_pe": None,
+            "strategy": "BREAKOUT", "entry_low": 380, "entry_high": 380,
+            "targets": [], "sl": None, "sl_deferred": False,
+            "sl_at_cost": False, "wait_for_price": False, "notes": "re-enter above 380",
+        })
+        parser.signal_fired(active)
+        reenter_sig = parser.parse("Re-enter above 380", msg_id=7)
+
+        # LLM returns REENTER with updated entry
+        self.assertEqual(reenter_sig.intent, "REENTER")
+        self.assertEqual(reenter_sig.entry_high, 380)
+        self.assertEqual(reenter_sig.strategy, "BREAKOUT")
+
+    def test_reenter_after_sl_hit_active_still_present(self):
+        """
+        SL hit does NOT call signal_closed() automatically.
+        Active signal persists so re-entry can use it.
+        This is intentional — the bot relies on this accidental persistence.
+        """
+        active = ParsedSignal(
+            intent="NEW_SIGNAL", instrument="NIFTY", strike="25500", ce_pe="CE",
+            strategy="RANGE", entry_low=215, entry_high=220,
+            targets=[230, 240, 255], sl=204, sl_deferred=False,
+        )
+        parser = _make_parser({})
+        parser.signal_fired(active)
+        # SL hits — signal_closed() is NOT called (bot doesn't call it on SL hit)
+        # active_signal must still be present for re-entry to work
+        self.assertIsNotNone(parser.get_active(),
+                             "Active signal must persist after SL hit for re-entry")
+
+    def test_reenter_returns_none_after_explicit_close(self):
+        """
+        If signal_closed() IS called (manual exit), get_active() returns None
+        and REENTER would show a warning instead of firing.
+        """
+        active = ParsedSignal(
+            intent="NEW_SIGNAL", instrument="NIFTY", strike="25500", ce_pe="CE",
+            strategy="RANGE", entry_low=215, entry_high=220,
+            targets=[230, 240, 255], sl=204, sl_deferred=False,
+        )
+        parser = _make_parser({})
+        parser.signal_fired(active)
+        parser.signal_closed()   # explicit close (e.g. Telegram EXIT command)
+        self.assertIsNone(parser.get_active(),
+                          "After signal_closed(), get_active() must return None")
 
     # ── UPDATE_SL ──────────────────────────────────────────────────────────────
 
@@ -531,6 +662,70 @@ class DictToSignalTests(unittest.TestCase):
         self.assertEqual(resolved.sl, 200)
         self.assertFalse(resolved.sl_deferred)
         self.assertTrue(resolved.is_actionable())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Screenshot-identified edge cases
+# ─────────────────────────────────────────────────────────────────────────────
+class ScreenshotEdgeCaseTests(unittest.TestCase):
+
+    def test_remaining_lot_exit_at_price_is_update_sl(self):
+        """
+        'Remaining lot exit at 190' — mentor is setting a new SL level,
+        NOT asking to exit immediately. Must be UPDATE_SL with sl=190.
+        """
+        parser = _make_parser({
+            "intent": "UPDATE_SL", "confidence": 0.92,
+            "instrument": None, "strike": None, "ce_pe": None,
+            "strategy": None, "entry_low": None, "entry_high": None,
+            "targets": [], "sl": 190, "sl_deferred": False,
+            "sl_at_cost": False, "wait_for_price": False,
+            "notes": "remaining lot exit level = new SL",
+        })
+        sig = parser.parse("Remaining lot exit at 190", msg_id=30)
+        self.assertEqual(sig.intent, "UPDATE_SL")
+        self.assertEqual(sig.sl, 190)
+
+    def test_exit_at_price_is_update_sl(self):
+        """'Exit at 190' (specific price) → UPDATE_SL, not FULL_EXIT."""
+        parser = _make_parser({
+            "intent": "UPDATE_SL", "confidence": 0.90,
+            "instrument": None, "strike": None, "ce_pe": None,
+            "strategy": None, "entry_low": None, "entry_high": None,
+            "targets": [], "sl": 190, "sl_deferred": False,
+            "sl_at_cost": False, "wait_for_price": False, "notes": "exit level 190",
+        })
+        sig = parser.parse("Exit at 190", msg_id=31)
+        self.assertEqual(sig.intent, "UPDATE_SL")
+        self.assertEqual(sig.sl, 190)
+
+    def test_no_sl_line_means_sl_deferred(self):
+        """
+        'Nifty 22600 pe above 208' with no SL line → sl_deferred=True.
+        Mentor will give SL separately.
+        """
+        parser = _make_parser(_new_signal_json(
+            instrument="NIFTY", strike="22600", ce_pe="PE",
+            strategy="BREAKOUT", entry_low=208, entry_high=208,
+            targets=[218, 228, 240, 255],
+            sl=None, sl_deferred=True,
+        ))
+        sig = parser.parse("Nifty 22600 pe above 208\nTarget 218/228/240/255+", msg_id=32)
+        self.assertTrue(sig.sl_deferred, "Signal with no SL line must have sl_deferred=True")
+        self.assertIsNone(sig.sl)
+        self.assertFalse(sig.is_actionable(), "sl_deferred signal must not fire SOT_BOT")
+
+    def test_track_both_levels_is_noise_prefilter(self):
+        """'Track both levels' is a commentary message — caught by pre-filter."""
+        self.assertTrue(is_noise("Track both levels"))
+        self.assertTrue(is_noise("track both levels today"))
+
+    def test_watch_both_levels_is_noise_prefilter(self):
+        self.assertTrue(is_noise("watch both levels"))
+
+    def test_keep_eye_on_is_noise_prefilter(self):
+        self.assertTrue(is_noise("Keep an eye on this level"))
+        self.assertTrue(is_noise("keep eye on 25300"))
 
 
 if __name__ == "__main__":
