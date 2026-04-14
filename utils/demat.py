@@ -1,6 +1,7 @@
 import calendar
 import csv
 import logging
+import math
 import pprint
 import time
 import traceback
@@ -141,16 +142,49 @@ class Demat(Config):
             self.squareoff_at_first_target = True if not self.quantity >= self.position.lot_size * 3 else self.account.squareoff_at_first_target
         
     def get_sell_quantity_at_target1(self):
-        # Sell 1/num_targets of total at T1 so more lots are preserved for later targets.
-        # e.g. 3 targets → 33%, 4 targets → 25%, 5 targets → 20%
+        # Base fraction: 1/num_targets (hold as much as possible for later targets).
         n = self.position.num_targets
-        quantity_at_target1 = self.total_trading_quantity / n
-        quantity_at_target1 = quantity_at_target1 + self.position.lot_size / 2
-        quantity_at_target1 = int(quantity_at_target1 - (quantity_at_target1 % self.position.lot_size))
+        base_fraction = 1.0 / n
+
+        # For NEAR trades the SL after T1 moves to range-low (second_entry_price),
+        # not to the entry fill.  This creates a residual risk of (entry - range_low)
+        # on every remaining lot.  Compute the minimum sell fraction needed so that
+        # T1 profits cover that residual risk if price fully reverses to range-low:
+        #
+        #   break_even_fraction = range_width / (T1_gap + range_width)
+        #
+        # Use whichever fraction is larger so we never lock in a net loss purely
+        # from a T1-hit + SL-to-range-low reversal.
+        sell_fraction = base_fraction
+        if (self.position.second_entry_price is not None
+                and not self.position.isBreakoutStrategy
+                and self.position.target1 > self.position.entry_price):
+            range_width = self.position.entry_price - self.position.second_entry_price
+            t1_gap = self.position.target1 - self.position.entry_price
+            if range_width > 0 and t1_gap > 0:
+                break_even_fraction = range_width / (t1_gap + range_width)
+                sell_fraction = max(base_fraction, break_even_fraction)
+                if break_even_fraction > base_fraction:
+                    self.logger.debug(
+                        f"{self.account.name} T1 break-even floor applied: "
+                        f"range={range_width}pts t1_gap={t1_gap}pts "
+                        f"min_sell={break_even_fraction:.0%} > 1/{n}={base_fraction:.0%}"
+                    )
+
+        # When the break-even floor is active, use ceiling rounding to guarantee
+        # T1 profits >= SL-to-range-low residual risk (floor rounding would leave
+        # a fractional lot's worth of unhedged loss).
+        # When holding proportionally (no floor), floor rounding to preserve lots.
+        floor_active = sell_fraction > base_fraction
+        raw_lots = self.total_trading_quantity * sell_fraction / self.position.lot_size
+        if floor_active:
+            quantity_at_target1 = math.ceil(raw_lots) * self.position.lot_size
+        else:
+            quantity_at_target1 = int(raw_lots) * self.position.lot_size
         # never sell everything — keep at least one lot for the final target
         quantity_at_target1 = min(quantity_at_target1, self.remaining_quantity - self.position.lot_size)
         quantity_at_target1 = max(quantity_at_target1, self.position.lot_size)
-        self.logger.debug(f"{self.account.name} Quantity to sell at Target1 (1/{n} of total): {quantity_at_target1}")
+        self.logger.debug(f"{self.account.name} Sell at Target1: {quantity_at_target1} ({sell_fraction:.0%} of total)")
         return quantity_at_target1
 
     def get_sell_quantity_at_target2(self):
