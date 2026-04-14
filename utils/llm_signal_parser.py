@@ -137,6 +137,7 @@ class DayContext:
         self.messages: list[dict] = []     # filtered meaningful messages
         self.active_signal: Optional[dict] = None    # currently running trade
         self.pending_signal: Optional[dict] = None   # awaiting SL before firing
+        self.signal_store: dict = {}       # msg_id → signal dict (for reply-chain lookup)
         self._date = date.today()
         logger.info("DayContext reset for new day/session")
 
@@ -177,6 +178,15 @@ class DayContext:
 
     def clear_pending(self):
         self.pending_signal = None
+
+    def store_signal(self, msg_id: int, signal: ParsedSignal):
+        """Store a fired signal keyed by its Telegram message ID."""
+        self.signal_store[msg_id] = signal.to_dict()
+
+    def get_signal_by_id(self, msg_id: int):
+        """Look up a previously fired signal by its Telegram message ID."""
+        d = self.signal_store.get(msg_id)
+        return _dict_to_signal(d) if d else None
 
     def context_for_llm(self) -> str:
         if not self.messages:
@@ -406,9 +416,24 @@ class LLMSignalParser:
         logger.info(f"[LLM] msg={msg_id} → {signal.summary()}")
         return signal
 
-    def signal_fired(self, signal: ParsedSignal):
-        """Call this after SOT_BOT is triggered so context tracks active trade."""
+    def signal_fired(self, signal: ParsedSignal, msg_id: int = None):
+        """Call this after SOT_BOT is triggered so context tracks active trade.
+
+        Pass msg_id (the Telegram message ID of the signal) to enable reply-chain
+        lookup — future follow-up messages that reply to this message can be
+        resolved exactly without relying on context inference.
+        """
         self.context.set_active(signal)
+        if msg_id is not None:
+            self.context.store_signal(msg_id, signal)
+
+    def get_by_msg_id(self, msg_id: int):
+        """Return the fired signal whose Telegram message ID matches msg_id.
+
+        Returns None if that message was never stored (e.g. it was a standalone
+        message, not a signal we fired on).
+        """
+        return self.context.get_signal_by_id(msg_id)
 
     def signal_pending(self, signal: ParsedSignal):
         """Call this when a signal with deferred SL is held."""

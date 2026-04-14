@@ -665,7 +665,88 @@ class DictToSignalTests(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Screenshot-identified edge cases
+# 5. Reply-chain signal store
+# ─────────────────────────────────────────────────────────────────────────────
+class ReplyChainTests(unittest.TestCase):
+
+    def _make_active(self, instrument="NIFTY", strike="25500", ce_pe="CE",
+                     entry_low=215, entry_high=220):
+        return ParsedSignal(
+            intent="NEW_SIGNAL", instrument=instrument, strike=strike,
+            ce_pe=ce_pe, strategy="RANGE",
+            entry_low=entry_low, entry_high=entry_high,
+            targets=[230, 240, 255, 270], sl=204,
+        )
+
+    def test_signal_stored_by_msg_id(self):
+        """signal_fired(signal, msg_id=X) stores the signal under key X."""
+        parser = _make_parser(_new_signal_json())
+        sig = self._make_active()
+        parser.signal_fired(sig, msg_id=1001)
+        retrieved = parser.get_by_msg_id(1001)
+        self.assertIsNotNone(retrieved)
+        self.assertEqual(retrieved.instrument, "NIFTY")
+        self.assertEqual(retrieved.entry_low, 215)
+
+    def test_get_by_msg_id_returns_none_for_unknown_id(self):
+        parser = _make_parser({})
+        self.assertIsNone(parser.get_by_msg_id(9999))
+
+    def test_multiple_signals_stored_independently(self):
+        """Two signals on different msg_ids are retrieved independently."""
+        parser = _make_parser({})
+        nifty  = self._make_active(instrument="NIFTY",  strike="25500", ce_pe="CE",
+                                   entry_low=215, entry_high=220)
+        bnifty = self._make_active(instrument="BANKNIFTY", strike="52000", ce_pe="PE",
+                                   entry_low=370, entry_high=380)
+        parser.signal_fired(nifty,  msg_id=100)
+        parser.signal_fired(bnifty, msg_id=200)
+
+        r100 = parser.get_by_msg_id(100)
+        r200 = parser.get_by_msg_id(200)
+        self.assertEqual(r100.instrument, "NIFTY")
+        self.assertEqual(r200.instrument, "BANKNIFTY")
+
+    def test_reply_chain_resolves_correct_signal_among_two_active(self):
+        """
+        Mentor gives two signals (Nifty CE and BankNifty PE) in the same session.
+        'Re-enter same' replied to the BankNifty message should resolve to
+        BankNifty, NOT whatever is in active_signal (which is the last fired).
+        """
+        parser = _make_parser({})
+        nifty  = self._make_active(instrument="NIFTY",  strike="25500", ce_pe="CE",
+                                   entry_low=215, entry_high=220)
+        bnifty = self._make_active(instrument="BANKNIFTY", strike="52000", ce_pe="PE",
+                                   entry_low=370, entry_high=380)
+        parser.signal_fired(nifty,  msg_id=100)
+        parser.signal_fired(bnifty, msg_id=200)  # active_signal is now BankNifty
+
+        # Follow-up replied to msg 100 (the Nifty signal)
+        ref = parser.get_by_msg_id(100)
+        self.assertEqual(ref.instrument, "NIFTY",
+                         "Reply to Nifty msg must resolve Nifty, not the latest active BankNifty")
+
+    def test_signal_store_cleared_on_day_reset(self):
+        """signal_store is wiped on context reset (new market day)."""
+        parser = _make_parser({})
+        sig = self._make_active()
+        parser.signal_fired(sig, msg_id=555)
+        self.assertIsNotNone(parser.get_by_msg_id(555))
+        # Force a reset
+        parser.context._reset()
+        self.assertIsNone(parser.get_by_msg_id(555),
+                          "signal_store must be cleared on day reset")
+
+    def test_signal_fired_without_msg_id_still_sets_active(self):
+        """signal_fired(signal) with no msg_id still sets active_signal."""
+        parser = _make_parser({})
+        sig = self._make_active()
+        parser.signal_fired(sig)   # no msg_id
+        self.assertIsNotNone(parser.get_active())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Screenshot-identified edge cases
 # ─────────────────────────────────────────────────────────────────────────────
 class ScreenshotEdgeCaseTests(unittest.TestCase):
 

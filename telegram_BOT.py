@@ -1430,7 +1430,7 @@ def _position_from_llm(signal) -> Position:
     )
 
 
-async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None):
+async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None, reply_to_msg_id=None):
     """Route LLM-parsed intent to the right action."""
     global llm_parser
 
@@ -1438,6 +1438,21 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None):
     conf   = signal.confidence
 
     sc = source_chat_id  # shorthand
+
+    # ── Reply-chain resolution ────────────────────────────────────────────────
+    # When a follow-up message is a Telegram reply, look up the exact signal
+    # that was fired for that parent message.  This is far more reliable than
+    # relying on "the most recent active signal" — especially when the mentor
+    # gives multiple signals in a day or re-enters the same trade from scratch.
+    def _reference_signal():
+        """Return the most relevant signal for this follow-up message."""
+        if reply_to_msg_id:
+            ref = llm_parser.get_by_msg_id(reply_to_msg_id)
+            if ref:
+                logger.info(f"[LLM] Reply-chain: resolved to msg_id={reply_to_msg_id} → {ref.summary()}")
+                return ref
+        # Fallback: use whichever signal is currently active
+        return llm_parser.get_active()
 
     # ── NEW_SIGNAL ───────────────────────────────────────────────────────────
     if intent == "NEW_SIGNAL":
@@ -1485,7 +1500,7 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None):
             event_id=event_id, source_chat_id=sc
         )
         trigger_SOT_BOT(position)
-        llm_parser.signal_fired(signal)
+        llm_parser.signal_fired(signal, msg_id=event_id)
 
     # ── SL_RESOLVED ──────────────────────────────────────────────────────────
     elif intent == "SL_RESOLVED":
@@ -1498,18 +1513,21 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None):
                 event_id=event_id, source_chat_id=sc
             )
             trigger_SOT_BOT(position)
-            llm_parser.signal_fired(resolved)
+            llm_parser.signal_fired(resolved, msg_id=event_id)
         else:
             logger.info(f"[LLM] SL_RESOLVED but no pending signal to complete")
 
     # ── REENTER ──────────────────────────────────────────────────────────────
     elif intent == "REENTER":
-        active = llm_parser.get_active()
-        if active and active.is_actionable():
-            # Merge any non-null fields from the REENTER signal over the
-            # stored active signal — handles "re-enter above 380" (changed
-            # entry) while falling back to original params for "re-enter same".
-            merged = active
+        # Prefer the reply-chain reference — if the mentor replied to the
+        # original signal message, that's the exact trade to re-enter.
+        # Falls back to the most recent active signal if no reply link.
+        reference = _reference_signal()
+        if reference and reference.is_actionable():
+            # Merge any non-null fields from this message over the reference —
+            # handles "re-enter above 380" (new entry level / strategy) while
+            # "re-enter same" just re-fires the original params unchanged.
+            merged = reference
             if signal.entry_high is not None:
                 merged.entry_low  = signal.entry_low  or signal.entry_high
                 merged.entry_high = signal.entry_high
@@ -1526,20 +1544,22 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None):
                 event_id=event_id, source_chat_id=sc
             )
             trigger_SOT_BOT(position)
-            llm_parser.signal_fired(merged)
+            llm_parser.signal_fired(merged, msg_id=event_id)
         else:
             await send_message(
-                f"⚠️ LLM: Re-enter received but no active signal in context.\n\nRaw: {raw_message}",
+                f"⚠️ LLM: Re-enter received but no reference signal found.\n\nRaw: {raw_message}",
                 event_id=event_id, source_chat_id=sc
             )
 
     # ── UPDATE_SL ────────────────────────────────────────────────────────────
     elif intent == "UPDATE_SL":
-        active = llm_parser.get_active()
+        # Use reply-chain to identify which trade this SL update belongs to.
+        reference = _reference_signal()
         await send_message(
             f"📢 LLM: SL Update detected.\n"
-            f"New SL: {signal.sl}\n"
-            f"Active trade: {active.summary() if active else 'unknown'}\n\n"
+            f"New SL: {signal.sl}"
+            + (f" (sl_at_cost mode)" if signal.sl_at_cost else "")
+            + f"\nTrade: {reference.summary() if reference else 'unknown'}\n\n"
             f"⚠️ Manual action may be needed in running SOT_BOT.",
             event_id=event_id, source_chat_id=sc
         )
@@ -1612,9 +1632,14 @@ async def analyse_event(event):
         # ── LLM intent routing (signal channels) ──
         if llm_parser and event.chat_id in (sot_channel, sot_trial_channel, qwerty_channel):
             is_edit = hasattr(event, 'message') and getattr(event.message, 'edit_date', None) is not None
+            # Capture reply-chain link — if this message is a Telegram reply,
+            # reply_to_msg_id is the ID of the parent message (the original signal).
+            reply_to_msg_id = getattr(event.message, 'reply_to_msg_id', None)
             llm_signal = llm_parser.parse(actual_message, msg_id=event_id, is_edit=is_edit)
             if llm_signal.intent != "NOISE":
-                await handle_llm_intent(llm_signal, event_id, actual_message, source_chat_id=event.chat_id)
+                await handle_llm_intent(llm_signal, event_id, actual_message,
+                                        source_chat_id=event.chat_id,
+                                        reply_to_msg_id=reply_to_msg_id)
                 # For clear NEW_SIGNAL with high confidence, let LLM handle it
                 # and skip the regex path to avoid double-triggering
                 if llm_signal.intent == "NEW_SIGNAL" and llm_signal.confidence >= 0.85 and not llm_signal.sl_deferred:
