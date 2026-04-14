@@ -76,6 +76,7 @@ parser.add_argument('-e2', type=str2int_or_none, nargs='?', default=None, help='
 parser.add_argument('-t1', type=int, help='Target 1')
 parser.add_argument('-t2', type=int, help='Target 2')
 parser.add_argument('-t3', type=int, help='Target 3')
+parser.add_argument('-targets', type=str, default=None, help='All targets comma-separated e.g. 370,390,410,430,450')
 parser.add_argument('-sl', type=int, help='Stoploss')
 parser.add_argument('-b', type=int, help='Build Number')
 parser.add_argument('-bo', type=str2bool, nargs='?', const=True, default=False, help='is Breakout')
@@ -102,6 +103,13 @@ second_entry_price = args.e2
 target1 = args.t1
 target2 = args.t2
 target3 = args.t3
+# Full target list — prefer -targets if provided, fall back to t1/t2/t3
+if args.targets:
+    targets_list = [int(t) for t in args.targets.split(',')]
+else:
+    targets_list = [t for t in [target1, target2, target3] if t is not None]
+# _booked[i] tracks whether we've already booked at targets_list[i]
+_booked = [False] * len(targets_list)
 sot_stoploss = args.sl
 static_stoploss,stop_loss,stop_loss_aggressive_trailing, lazy_stoploss = args.sl,args.sl,args.sl, args.sl
 enterFewPointsAbove = True
@@ -524,8 +532,8 @@ class TradeHandler:
 
         # --- per-tick flags ---
         self._isAveraged = False
-        self._soldAtTarget1 = False
-        self._soldAtTarget2 = False
+        self._soldAtTarget1 = False   # kept for play_safe trail references
+        self._soldAtTarget2 = False   # kept for play_safe trail references
         self._sold_aggressive_positions = False
         self._sold_lazy_positions = False
         self._message_sent = False
@@ -667,45 +675,44 @@ class TradeHandler:
                     self.stop_loss_aggressive_trailing = self.avg_price + 3 if not onCrossingAbove else entry_price + 3
                 logger.critical(f"Trailed stop_loss_aggressive_trailing to Breakeven. as CMP>=target1 - {aggressive_trailing_points1}.  CMP: {cmp}/- ; Average Price: {self.avg_price}/- ; Next Target: {target1}/- ; stop_loss_aggressive_trailing: {self.stop_loss_aggressive_trailing}/-")
 
-            elif round(cmp) >= target1 and cmp < target2 and not self._soldAtTarget1:
-                send_order_placement_erros("BOOK TARGET1", trade_manager.book_target1(position, cmp))
-                self._soldAtTarget1 = True
-                asyncio.run(send_message(f"😍 {gain} Points..."))
-                # For NEAR/range trades use second_entry_price (lower of range) as the
-                # SL-to-cost anchor — the support level, not the actual fill price.
-                # e.g. entered at 350 in a 340-350 range: SL moves to 340, not 350.
-                # For breakout or no-range trades fall back to avg_price as before.
-                sl_anchor = (second_entry_price
-                             if second_entry_price is not None and not isBreakoutStrategy
-                             else self.avg_price)
-                self.stop_loss = sl_anchor if precise_trailing else sl_anchor + 3
-                if onCrossingAbove:
-                    self.stop_loss = self.stop_loss - 2
-                self.lazy_stoploss = self.stop_loss
-                logger.critical(f"Trailed SL to {'range-low' if second_entry_price and not isBreakoutStrategy else 'breakeven'} ({sl_anchor}) on T1 hit. CMP: {cmp}/- ; Avg: {self.avg_price}/- ; Next: {target2}/- ; SL: {self.stop_loss}/-")
+            else:
+                # ── Target booking loop ─────────────────────────────────────
+                # Sequential `if` checks (NOT elif) so a spike that skips one
+                # or more targets still fires all applicable bookings in one tick.
+                for i, tgt in enumerate(targets_list):
+                    if round(cmp) < tgt or _booked[i]:
+                        continue  # not reached yet, or already booked
 
-            elif round(cmp) >= target2 - aggressive_trailing_points2 and self._soldAtTarget1 and not self._soldAtTarget2 and self.stop_loss_aggressive_trailing != target1:
-                self.stop_loss_aggressive_trailing = target1
-                logger.critical(f"Trailed stop_loss_aggressive_trailing to Target1 as CMP>=target2 - {aggressive_trailing_points2}.  CMP: {cmp}/- ; Average Price: {self.avg_price}/- ; Next Target: {target2}/- ; stop_loss_aggressive_trailing: {self.stop_loss_aggressive_trailing}/-")
+                    is_last = (i == len(targets_list) - 1)
+                    smileys = "😍" * (i + 1)
+                    send_order_placement_erros(f"BOOK TARGET{i+1}", trade_manager.book_at_target(position, cmp, i))
+                    _booked[i] = True
+                    # keep legacy flags in sync for play_safe trail blocks
+                    if i == 0: self._soldAtTarget1 = True
+                    if i == 1: self._soldAtTarget2 = True
+                    asyncio.run(send_message(f"{smileys} {gain} Points{'!' if is_last else '...'}"))
 
-            elif round(cmp) >= target2 and cmp < target3 and not self._soldAtTarget2:
-                send_order_placement_erros("BOOK TARGET2", trade_manager.book_target2(position, cmp))
-                self._soldAtTarget2 = True
-                self.stop_loss = target1 if precise_trailing else target1 + 3
-                asyncio.run(send_message(f"😍😍 {gain} Points..."))
-                logger.critical(f"Trailed Stop-loss to Target1. CMP: {cmp}/- ; Average Price: {self.avg_price}/- ; Next Target: {target3}/- ; Stop-loss: {self.stop_loss}/-")
+                    if i == 0:
+                        # First target hit: SL → range-low (NEAR) or avg_price (ABOVE)
+                        sl_anchor = (second_entry_price
+                                     if second_entry_price is not None and not isBreakoutStrategy
+                                     else self.avg_price)
+                        self.stop_loss = sl_anchor if precise_trailing else sl_anchor + 3
+                        if onCrossingAbove:
+                            self.stop_loss -= 2
+                        self.lazy_stoploss = self.stop_loss
+                        logger.critical(f"T1 hit — SL → {sl_anchor} ({'range-low' if second_entry_price and not isBreakoutStrategy else 'breakeven'}). CMP: {cmp}/- SL: {self.stop_loss}/-")
+                    elif not is_last:
+                        # Intermediate target hit: SL → previous target
+                        prev_tgt = targets_list[i - 1]
+                        self.stop_loss = prev_tgt if precise_trailing else prev_tgt + 3
+                        logger.critical(f"T{i+1} hit — SL → T{i} ({prev_tgt}). CMP: {cmp}/- SL: {self.stop_loss}/-")
 
-            elif round(cmp) >= target3 - aggressive_trailing_points3 and self.stop_loss_aggressive_trailing != target2:
-                self.stop_loss_aggressive_trailing = target2 if precise_trailing else target2 + 3
-                logger.critical(f"Trailed stop_loss_aggressive_trailing to Target2 as CMP>=target2 - {aggressive_trailing_points3}.  CMP: {cmp}/- ; Average Price: {self.avg_price}/- ; Next Target: {target3}/- ; stop_loss_aggressive_trailing: {self.stop_loss_aggressive_trailing}/-")
-
-            elif round(cmp) >= target3:
-                send_order_placement_erros("BOOK TARGET3", trade_manager.book_target3(position, cmp))
-                logger.critical(f"Target3 hit! closed at {cmp}/-; Highest LTP: {self.ltpHigh}/-")
-                asyncio.run(send_message(f"😍😍😍 {gain} Points!"))
-                send_calculated_pnL()
-                self._finish()
-                return
+                    if is_last:
+                        logger.critical(f"Last target (T{i+1}={tgt}) hit! Closed at {cmp}/- ; Highest LTP: {self.ltpHigh}/-")
+                        send_calculated_pnL()
+                        self._finish()
+                        return
 
             # Check all accounts closed
             status = [demat.position_open for demat in demats]

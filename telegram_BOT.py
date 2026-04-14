@@ -396,14 +396,17 @@ def build_position_data(message):
         # Always use the mentor's LAST stated target as T3 so remaining lots
         # hold as far as intended (handles 3, 4, 5, 6-target signals uniformly).
         # If only 2 targets given, extrapolate one step as before.
-        num_targets = len(targets) - 1  # targets[0] is the keyword ('Target'), rest are numbers
-        if num_targets >= 3:
-            target3 = int(targets[-1])
+        # Build the full ordered target list from the mentor's signal.
+        # targets[0] is the keyword ('Target'), rest are the numbers.
+        all_targets = [int(targets[i]) for i in range(1, len(targets))]
+        if len(all_targets) >= 3:
+            target3 = all_targets[-1]
         else:
-            num_targets = 3
-            target3 = target2 + int(targets[2])-int(targets[1])
+            # extrapolate a third target if only 2 given
+            target3 = target2 + (target2 - target1)
+            all_targets.append(target3)
         brokenSignal, brokenTargets, brokenSL = None, None, None
-        return Position(instrument=instrument,strike=strike,ce_pe=PE_CE,entry_price=entry_price,second_entry_price=second_entry_price,stoploss=stoploss,target1=target1,target2=target2,target3=target3,isBreakoutStrategy=isBreakoutStrategy,enterFewPointsAbove=additional_points,spot=spot,exit_strategy=exit_strategy,num_targets=num_targets)
+        return Position(instrument=instrument,strike=strike,ce_pe=PE_CE,entry_price=entry_price,second_entry_price=second_entry_price,stoploss=stoploss,target1=target1,target2=target2,target3=target3,isBreakoutStrategy=isBreakoutStrategy,enterFewPointsAbove=additional_points,spot=spot,exit_strategy=exit_strategy,targets=all_targets)
     elif signal and not targets and not sl and ("CE" in signal or "PE" in signal):
         if not message.startswith("INSTRUMENT:"):
             asyncio.run(send_message(f"SOT_BREACH: Missing Target and SL.\n\nSOT_MESSAGE:\n{message}"))
@@ -498,13 +501,13 @@ def get_cmd_created_time(cmd):
 def trigger_SOT_BOT(postion_data: Position):
     try:
         cmd = None
+        targets_str = ",".join(str(t) for t in postion_data.targets)
         if postion_data.entry_price != 0 and not postion_data.isBreakoutStrategy:
-            # cmd = bot  + " " + postion_data.instrument+" "+str(postion_data.strike)+" "+str(postion_data.ce_pe)+" "+str(postion_data.isBreakoutStrategy)+" "+str(postion_data.entry_price)+" "+str(postion_data.target1)+" "+str(postion_data.target2)+" "+str(postion_data.target3)+" "+str(postion_data.stoploss)+" "+str(postion_data.enterFewPointsAbove)+" "+str(postion_data.onCrossingAbove)
-            cmd = bot  + " -i=" + postion_data.instrument+" -s="+str(postion_data.strike)+" -cepe="+str(postion_data.ce_pe)+" -bo="+str(postion_data.isBreakoutStrategy)+" -e="+str(postion_data.entry_price)+" -t1="+str(postion_data.target1)+" -t2="+str(postion_data.target2)+" -t3="+str(postion_data.target3)+" -sl="+str(postion_data.stoploss)+" -efpa="+str(postion_data.enterFewPointsAbove)+" -oca="+str(postion_data.onCrossingAbove) + " -e2="+str(postion_data.second_entry_price)
+            cmd = bot  + " -i=" + postion_data.instrument+" -s="+str(postion_data.strike)+" -cepe="+str(postion_data.ce_pe)+" -bo="+str(postion_data.isBreakoutStrategy)+" -e="+str(postion_data.entry_price)+" -t1="+str(postion_data.target1)+" -t2="+str(postion_data.target2)+" -t3="+str(postion_data.target3)+" -sl="+str(postion_data.stoploss)+" -efpa="+str(postion_data.enterFewPointsAbove)+" -oca="+str(postion_data.onCrossingAbove) + " -e2="+str(postion_data.second_entry_price)+" -targets="+targets_str
             logger.info(f"[SOT_BOT]: {cmd}")
             pyperclip.copy(cmd)
         elif postion_data.isBreakoutStrategy:
-            cmd = bot  + " -i=" + postion_data.instrument+" -s="+str(postion_data.strike)+" -cepe="+str(postion_data.ce_pe)+" -bo="+str(not postion_data.isBreakoutStrategy)+" -e="+str(postion_data.entry_price)+" -t1="+str(postion_data.target1)+" -t2="+str(postion_data.target2)+" -t3="+str(postion_data.target3)+" -sl="+str(postion_data.stoploss)+" -efpa="+str(postion_data.enterFewPointsAbove)+" -oca="+str(not postion_data.onCrossingAbove) + " -e2="+str(postion_data.second_entry_price)
+            cmd = bot  + " -i=" + postion_data.instrument+" -s="+str(postion_data.strike)+" -cepe="+str(postion_data.ce_pe)+" -bo="+str(not postion_data.isBreakoutStrategy)+" -e="+str(postion_data.entry_price)+" -t1="+str(postion_data.target1)+" -t2="+str(postion_data.target2)+" -t3="+str(postion_data.target3)+" -sl="+str(postion_data.stoploss)+" -efpa="+str(postion_data.enterFewPointsAbove)+" -oca="+str(not postion_data.onCrossingAbove) + " -e2="+str(postion_data.second_entry_price)+" -targets="+targets_str
             if postion_data.spot:
                cmd = cmd + " -spot=" + str(postion_data.spot)
             if postion_data.exit_strategy:
@@ -1394,11 +1397,12 @@ def extract_nse_instrument(data):
 def _position_from_llm(signal) -> Position:
     """Convert a ParsedSignal to a Position object for SOT_BOT."""
     entry = signal.entry_high  # use the higher end of range as the working price
-    num_targets = max(len(signal.targets), 3)
-    t1 = signal.targets[0] if len(signal.targets) > 0 else entry + 15
-    t2 = signal.targets[1] if len(signal.targets) > 1 else t1 + 15
-    # last target from signal — holds remaining lots as far as possible
-    t3 = signal.targets[-1] if len(signal.targets) > 2 else t2 + 15
+    all_targets = list(signal.targets) if signal.targets else []
+    t1 = all_targets[0] if len(all_targets) > 0 else entry + 15
+    t2 = all_targets[1] if len(all_targets) > 1 else t1 + 15
+    if len(all_targets) < 3:
+        all_targets.append(t2 + (t2 - t1))
+    t3 = all_targets[-1]
     return Position(
         instrument=signal.instrument,
         strike=signal.strike,
@@ -1413,7 +1417,7 @@ def _position_from_llm(signal) -> Position:
         enterFewPointsAbove=False,
         spot=None,
         exit_strategy=None,
-        num_targets=num_targets,
+        targets=all_targets,
     )
 
 

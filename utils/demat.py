@@ -327,6 +327,59 @@ class Demat(Config):
         else:
             None
 
+    def book_at_target(self, position, price, target_index):
+        """
+        Book partial or full quantity at any target by index.
+
+        target_index: 0-based index into position.targets list.
+        - Last target (target_index == len(targets)-1): close all remaining.
+        - Any earlier target: sell proportional quantity using the same
+          break-even floor logic as get_sell_quantity_at_target1 for index 0,
+          and proportional-of-remaining for all subsequent intermediate targets.
+        """
+        if not self.position_open:
+            return None
+
+        n = self.position.num_targets
+        is_last = (target_index == n - 1)
+
+        if is_last or self.squareoff_at_first_target:
+            # Close everything remaining
+            sell_qty = self.remaining_quantity
+            sellOrderID = self.placeOrderFyers(self.position.strike, "SELL", sell_qty, "MARKET", price, "regular")
+            self.exit_time = time.time()
+            profit = (price - self.average_price) * sell_qty
+            self.PnL += profit
+            self.remaining_quantity = 0
+            self.position_open = False
+            self.position.exit_price = price
+            label = f"Target{target_index + 1}(LAST)" if is_last else "Target1(SQUAREOFF)"
+            self.logger.info(f"{self.account.name} : {label}: Closed {sell_qty} @ {price}/- Profit: {profit}/- PnL: {self.PnL}/-")
+            self.generatePnL()
+            self.print_demat_status()
+            return sellOrderID
+
+        # Intermediate target — sell proportional quantity.
+        if target_index == 0:
+            # Reuse the same break-even floor logic from get_sell_quantity_at_target1
+            sell_qty = self.get_sell_quantity_at_target1()
+        else:
+            # Equal fraction of remaining for each subsequent intermediate target
+            sell_qty = self.get_sell_quantity_at_target2()
+
+        if sell_qty == 0:
+            self.logger.debug(f"{self.account.name} Target{target_index + 1}: 0 qty — deferring to next target.")
+            return None
+
+        sellOrderID = self.placeOrderFyers(self.position.strike, "SELL", sell_qty, "MARKET", price, "regular")
+        self.remaining_quantity -= sell_qty
+        self.position_open = self.remaining_quantity > 0
+        profit = (price - self.average_price) * sell_qty
+        self.PnL += profit
+        self.logger.info(f"{self.account.name} : Target{target_index + 1}: Sold {sell_qty} @ {price}/- Profit: {profit}/- Remaining: {self.remaining_quantity} PnL: {self.PnL}/-")
+        self.print_demat_status()
+        return sellOrderID
+
     def square_off_all_positions(self):
         
         if not self.paper_trading:

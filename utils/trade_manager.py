@@ -14,6 +14,7 @@ class TradeAction(Enum):
     BOOK_TARGET1 = auto()
     BOOK_TARGET2 = auto()
     BOOK_TARGET3 = auto()
+    BOOK_AT_TARGET = auto()
     EXIT_VIA_TELEGRAM = auto()
 
 class TradeManager:
@@ -32,7 +33,7 @@ class TradeManager:
         self.demats = demats
         self.logger = logger
     
-    def _position_worker(self, demat, action, position, result_queue, price=None):
+    def _position_worker(self, demat, action, position, result_queue, price=None, **kwargs):
         """
         Worker function for handling positions.
         """
@@ -54,19 +55,21 @@ class TradeManager:
             result = demat.book_target2(position, price)
         elif action == TradeAction.BOOK_TARGET3:
             result = demat.book_target3(position, price)
+        elif action == TradeAction.BOOK_AT_TARGET:
+            result = demat.book_at_target(position, price, kwargs.get('target_index', 0))
         else:
             raise ValueError("Invalid action specified")
 
         return result_queue.put(result)
 
-    def _handle_position(self, action, position, price=None):
+    def _handle_position(self, action, position, price=None, **kwargs):
         """
         Handle the threading and queueing for entering or exiting positions.
         """
         result_queue = Queue()
         threads = []
         for demat in self.demats:
-            thread = threading.Thread(target=self._position_worker, args=(demat, action, position, result_queue, price))
+            thread = threading.Thread(target=self._position_worker, args=(demat, action, position, result_queue, price), kwargs=kwargs)
             thread.start()
             threads.append(thread)
 
@@ -116,6 +119,13 @@ class TradeManager:
         book_target3 a position on all Demat accounts.
         """
         return self._handle_position(TradeAction.BOOK_TARGET3, position, price)
+
+    def book_at_target(self, position, price, target_index):
+        """
+        Book partial (or full at last target) on all Demat accounts.
+        target_index is 0-based into position.targets.
+        """
+        return self._handle_position(TradeAction.BOOK_AT_TARGET, position, price, target_index=target_index)
 
     def square_off_position(self, position, price):
         """
