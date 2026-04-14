@@ -1,0 +1,436 @@
+"""
+utils/llm_signal_parser.py
+───────────────────────────────────────────────────────────────────────────────
+LLM-based trade signal parser using Claude API.
+
+Replaces the regex-only approach with context-aware intent classification.
+Handles: new signals, re-entries, SL updates, cancellations, deferred SL,
+         partial exits, noise filtering.
+
+DayContext resets at market open (09:15 IST) each day.
+"""
+
+import json
+import logging
+import os
+import re
+from dataclasses import dataclass, field, asdict
+from datetime import datetime, date, time as dtime
+from typing import Optional
+
+import anthropic
+
+# Try to import key from credentials.py as a fallback when env var is not set
+try:
+    from utils.credentials import ANTHROPIC_API_KEY as _CREDS_API_KEY
+except ImportError:
+    _CREDS_API_KEY = None
+
+logger = logging.getLogger(__name__)
+
+# ── Noise detection (skip before even calling LLM) ───────────────────────────
+# Messages that are pure celebration / update spam — no trading intent
+_NOISE_ONLY_RE = re.compile(
+    r'^[\s\d🚀💸✅📈📉🔥💰🎯⚡🌟😊😁😄👍🏻👏✨\+\-\.\/\*!,]+$'
+)
+_NOISE_PHRASE_RE = re.compile(
+    r'^\s*(good\s*(morning|night|evening|day)|gm\b|gn\b|'
+    r'have a\s*(wonderful|great|profitable)|'
+    r'send\s*screenshot|those\s*who\s*booked|'
+    r'trades\s*taken\s*today|morning\s*jackpot\s*done|'
+    r'watchlist|profit\s*screenshot|'
+    r'goood?\s*morning|wonderful\s*and\s*profitable)',
+    re.IGNORECASE
+)
+
+MARKET_OPEN_TIME = dtime(9, 15, 0)   # IST — context resets here
+
+
+# ── Data structures ───────────────────────────────────────────────────────────
+
+@dataclass
+class ParsedSignal:
+    """Clean structured signal from LLM."""
+    intent: str                        # see INTENTS below
+    confidence: float = 0.0
+    instrument: Optional[str] = None
+    strike: Optional[str] = None
+    ce_pe: Optional[str] = None
+    strategy: Optional[str] = None    # RANGE | BREAKOUT
+    entry_low: Optional[int] = None
+    entry_high: Optional[int] = None
+    targets: list = field(default_factory=list)
+    sl: Optional[int] = None
+    sl_deferred: bool = False
+    wait_for_price: bool = True
+    notes: str = ""
+    raw_message: str = ""
+
+    def is_actionable(self) -> bool:
+        """True if we have enough to fire SOT_BOT."""
+        return (
+            self.intent == "NEW_SIGNAL"
+            and self.instrument is not None
+            and self.strike is not None
+            and self.ce_pe is not None
+            and len(self.targets) >= 2
+            and not self.sl_deferred
+            and self.sl is not None
+        )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    def summary(self) -> str:
+        if self.intent == "NOISE":
+            return "NOISE"
+        parts = [f"intent={self.intent}({self.confidence:.0%})"]
+        if self.instrument:
+            parts.append(f"{self.instrument} {self.strike} {self.ce_pe}")
+        if self.strategy:
+            parts.append(self.strategy)
+        if self.entry_low:
+            parts.append(f"entry={self.entry_low}-{self.entry_high}")
+        if self.targets:
+            parts.append(f"T={'/'.join(str(t) for t in self.targets[:3])}...")
+        if self.sl:
+            parts.append(f"SL={self.sl}")
+        elif self.sl_deferred:
+            parts.append("SL=DEFERRED")
+        if self.notes:
+            parts.append(f"[{self.notes}]")
+        return " | ".join(parts)
+
+
+# Valid intents the LLM can return
+INTENTS = {
+    "NEW_SIGNAL",     # Fresh trade signal
+    "REENTER",        # Re-enter same signal (use active/last signal params)
+    "UPDATE_SL",      # Mentor sent a new SL for the active trade
+    "UPDATE_TARGET",  # Mentor revised targets
+    "SL_RESOLVED",    # This message resolves a previously deferred SL
+    "CANCEL",         # Ignore / cancel / don't take the pending signal
+    "PARTIAL_EXIT",   # Book X lots / X%
+    "FULL_EXIT",      # Exit everything
+    "NOISE",          # No trading content
+}
+
+
+# ── Context window ────────────────────────────────────────────────────────────
+
+class DayContext:
+    """
+    Maintains today's meaningful message history and active signal state.
+    Resets at 09:15 IST (or when date changes).
+    """
+
+    MAX_CONTEXT = 12   # max messages to send to LLM
+
+    def __init__(self):
+        self._reset()
+
+    def _reset(self):
+        self.messages: list[dict] = []     # filtered meaningful messages
+        self.active_signal: Optional[dict] = None    # currently running trade
+        self.pending_signal: Optional[dict] = None   # awaiting SL before firing
+        self._date = date.today()
+        logger.info("DayContext reset for new day/session")
+
+    def _should_reset(self) -> bool:
+        now = datetime.now()
+        if now.date() != self._date:
+            return True
+        # Reset at market open if we haven't yet today
+        if now.time() >= MARKET_OPEN_TIME and self._date != date.today():
+            return True
+        return False
+
+    def add_message(self, text: str, msg_id: int, is_edit: bool = False):
+        if self._should_reset():
+            self._reset()
+        if is_noise(text):
+            return  # don't pollute context with rockets
+        entry = {
+            "id": msg_id,
+            "time": datetime.now().strftime("%H:%M"),
+            "text": text.strip(),
+            "edited": is_edit,
+        }
+        self.messages.append(entry)
+        # Keep only last MAX_CONTEXT
+        if len(self.messages) > self.MAX_CONTEXT:
+            self.messages = self.messages[-self.MAX_CONTEXT:]
+
+    def set_active(self, signal: ParsedSignal):
+        self.active_signal = signal.to_dict()
+        self.pending_signal = None
+
+    def set_pending(self, signal: ParsedSignal):
+        self.pending_signal = signal.to_dict()
+
+    def clear_active(self):
+        self.active_signal = None
+
+    def clear_pending(self):
+        self.pending_signal = None
+
+    def context_for_llm(self) -> str:
+        if not self.messages:
+            return "(no messages yet today)"
+        lines = []
+        for m in self.messages[:-1]:  # exclude current message
+            prefix = "[EDIT]" if m["edited"] else ""
+            lines.append(f"[{m['time']}]{prefix} {m['text']}")
+        return "\n".join(lines) if lines else "(this is the first message today)"
+
+
+# ── Noise filter ─────────────────────────────────────────────────────────────
+
+def is_noise(text: str) -> bool:
+    """Fast pre-filter — skip before calling LLM."""
+    t = text.strip()
+    if not t:
+        return True
+    if _NOISE_ONLY_RE.fullmatch(t):
+        return True
+    if _NOISE_PHRASE_RE.match(t):
+        return True
+    # Short price-hit messages: "395🚀🚀" "84000 target was also done"
+    if len(t) < 40 and re.fullmatch(r'[\d\s🚀💸✅\+\-\.!,]+', t):
+        return True
+    return False
+
+
+# ── LLM parser ───────────────────────────────────────────────────────────────
+
+_SYSTEM_PROMPT = """You are a trade signal parser for an Indian options trading automation bot.
+
+The mentor sends signals for NSE/BSE options. Instruments: NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, BAJFINANCE, SENSEX.
+Exchange: NIFTY/BANKNIFTY/FINNIFTY/MIDCPNIFTY/BAJFINANCE trade on NSE. SENSEX trades on BSE.
+
+## Typical signal formats
+
+Range trade (entry range):
+  Nifty 25500 ce near 215-220
+  Target 230/240/255/270/290+
+  Sl 204
+  (Wait for price)
+
+Breakout trade (entry above a price):
+  Nifty 25300 ce above 105 level
+  Target 115/125/140/155+
+  Sl 94
+  (Wait for price)
+
+Exact price trade (entry at a single price — treat like RANGE with entry_low=entry_high):
+  Nifty 25300 pe at 205
+  Target 215/225/238/260/300+
+  Sl - I will update
+
+Older/uppercase format (same logic, just all caps and BUY prefix):
+  BUY BANKNIFTY 42600 PE NEAR 370-380
+  TARGET 400/420/450+++
+  SL - 355
+  ( Wait for price )
+
+## Instrument name typos to normalise
+- BANKNFITY, BANK NIFTY → BANKNIFTY
+- FIN NIFTY → FINNIFTY
+
+## Target line typos to recognise (still extract numbers from these)
+- TARGST, TATGET, TRAGET, TAGET, TARET, TARGWT → all mean Target
+
+## Common follow-up patterns and their intents
+- "Re-enter", "re-enter same", "add more near X" → REENTER
+- "Sl updated to 210", "sl now 195", "sl 185" as standalone → UPDATE_SL
+- "Ignore previous", "cancel", "don't take", "avoid this" → CANCEL
+- "Book X lots", "book 50%", "partial book here" → PARTIAL_EXIT
+- "Exit", "close all", "square off" → FULL_EXIT
+- "395🚀🚀", "target done", "target was also done" → NOISE
+- "Good morning", "wonderful day", screenshots → NOISE
+- "Sl - I will update" / "Sl - Will update" / "Sl - I will update on the basis of market move" → NEW_SIGNAL with sl_deferred=true
+- A message that gives just a number after a signal with deferred SL → SL_RESOLVED
+- Expiry mention like "12th june expiry" / "May exp" at the end of a signal → part of the signal notes, not a separate intent
+
+## Important rules
+- Signals may or may not start with "BUY" — the instrument name alone is enough
+- If SL field contains text (not a number) → sl_deferred=true, sl=null
+- If message references "same", "previous", "re-enter" without instrument → REENTER
+- LEVEL keyword = buy only exactly at that price, don't chase
+- "Wait for price" / "(Wait for price)" footer = wait_for_price=true
+- Entry range "215-220" → entry_low=215, entry_high=220, strategy=RANGE
+- "at 205" (single exact price) → entry_low=205, entry_high=205, strategy=RANGE
+- Breakout "above 105" or "above 105 level" → entry_low=105, entry_high=105, strategy=BREAKOUT
+- Extract ALL targets from the / separated list (typically 3-5 targets)
+- Targets with +/++/+++ at end — strip those, just keep the number
+
+Respond ONLY with valid JSON. No markdown. No explanation outside the JSON."""
+
+_USER_TEMPLATE = """\
+Active signal (SOT_BOT currently running this trade):
+{active_signal}
+
+Pending signal (received but waiting for SL before triggering):
+{pending_signal}
+
+Today's meaningful context (oldest → newest, excluding current message):
+{context}
+
+New message to classify:
+\"\"\"
+{message}
+\"\"\"
+
+JSON response:
+{{
+  "intent": "<NEW_SIGNAL|REENTER|UPDATE_SL|UPDATE_TARGET|SL_RESOLVED|CANCEL|PARTIAL_EXIT|FULL_EXIT|NOISE>",
+  "confidence": <0.0-1.0>,
+  "instrument": "<NIFTY|BANKNIFTY|FINNIFTY|MIDCPNIFTY|BAJFINANCE|SENSEX|null>",
+  "strike": "<number as string or null>",
+  "ce_pe": "<CE|PE|null>",
+  "strategy": "<RANGE|BREAKOUT|null>",
+  "entry_low": <integer or null>,
+  "entry_high": <integer or null>,
+  "targets": [<list of integers>],
+  "sl": <integer or null>,
+  "sl_deferred": <true|false>,
+  "wait_for_price": <true|false>,
+  "notes": "<one line explanation>"
+}}"""
+
+
+class LLMSignalParser:
+    """
+    Parses incoming Telegram messages using Claude.
+    Maintains per-day context automatically.
+    """
+
+    def __init__(self, api_key: Optional[str] = None, model: str = "claude-haiku-4-5-20251001"):
+        key = (
+            api_key
+            or os.environ.get("ANTHROPIC_API_KEY")
+            or (_CREDS_API_KEY if _CREDS_API_KEY and not _CREDS_API_KEY.startswith("YOUR_") else None)
+        )
+        if not key:
+            raise ValueError(
+                "ANTHROPIC_API_KEY not set. "
+                "Set it in ~/.aliases (export ANTHROPIC_API_KEY=...) "
+                "or in utils/credentials.py (ANTHROPIC_API_KEY = '...')."
+            )
+        self.client = anthropic.Anthropic(api_key=key)
+        self.model = model
+        self.context = DayContext()
+        logger.info(f"LLMSignalParser initialised with model={model}")
+
+    def parse(self, text: str, msg_id: int = 0, is_edit: bool = False) -> ParsedSignal:
+        """
+        Main entry point. Returns a ParsedSignal for every message.
+        Noise is filtered before the API call — cheap and fast.
+        """
+        # Fast path: obvious noise
+        if is_noise(text):
+            logger.debug(f"[LLM] msg={msg_id} → NOISE (pre-filter)")
+            return ParsedSignal(intent="NOISE", raw_message=text)
+
+        # Add to context window (before calling LLM so context is up to date)
+        self.context.add_message(text, msg_id, is_edit)
+
+        # Build prompt
+        user_prompt = _USER_TEMPLATE.format(
+            active_signal=json.dumps(self.context.active_signal, indent=2)
+                          if self.context.active_signal else "null",
+            pending_signal=json.dumps(self.context.pending_signal, indent=2)
+                           if self.context.pending_signal else "null",
+            context=self.context.context_for_llm(),
+            message=text.strip(),
+        )
+
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=512,
+                system=_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            raw = response.content[0].text.strip()
+            # Strip markdown code fences if LLM added them
+            raw = re.sub(r'^```(?:json)?\s*', '', raw)
+            raw = re.sub(r'\s*```$', '', raw)
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.error(f"[LLM] JSON parse error: {e} | raw={raw!r}")
+            return ParsedSignal(intent="NOISE", notes="LLM returned invalid JSON", raw_message=text)
+        except Exception as e:
+            logger.error(f"[LLM] API error: {e}")
+            return ParsedSignal(intent="NOISE", notes=f"LLM error: {e}", raw_message=text)
+
+        # Validate intent
+        intent = data.get("intent", "NOISE")
+        if intent not in INTENTS:
+            intent = "NOISE"
+
+        signal = ParsedSignal(
+            intent=intent,
+            confidence=float(data.get("confidence", 0.5)),
+            instrument=data.get("instrument"),
+            strike=str(data.get("strike")) if data.get("strike") else None,
+            ce_pe=data.get("ce_pe"),
+            strategy=data.get("strategy"),
+            entry_low=_int_or_none(data.get("entry_low")),
+            entry_high=_int_or_none(data.get("entry_high")),
+            targets=[int(t) for t in data.get("targets", []) if _int_or_none(t)],
+            sl=_int_or_none(data.get("sl")),
+            sl_deferred=bool(data.get("sl_deferred", False)),
+            wait_for_price=bool(data.get("wait_for_price", True)),
+            notes=data.get("notes", ""),
+            raw_message=text,
+        )
+
+        logger.info(f"[LLM] msg={msg_id} → {signal.summary()}")
+        return signal
+
+    def signal_fired(self, signal: ParsedSignal):
+        """Call this after SOT_BOT is triggered so context tracks active trade."""
+        self.context.set_active(signal)
+
+    def signal_pending(self, signal: ParsedSignal):
+        """Call this when a signal with deferred SL is held."""
+        self.context.set_pending(signal)
+
+    def signal_resolved(self, sl: int):
+        """SL arrived — complete the pending signal."""
+        if self.context.pending_signal:
+            self.context.pending_signal["sl"] = sl
+            self.context.pending_signal["sl_deferred"] = False
+            resolved = _dict_to_signal(self.context.pending_signal)
+            self.context.clear_pending()
+            return resolved
+        return None
+
+    def signal_closed(self):
+        """Call when active trade is exited."""
+        self.context.clear_active()
+
+    def get_pending(self) -> Optional[ParsedSignal]:
+        if self.context.pending_signal:
+            return _dict_to_signal(self.context.pending_signal)
+        return None
+
+    def get_active(self) -> Optional[ParsedSignal]:
+        if self.context.active_signal:
+            return _dict_to_signal(self.context.active_signal)
+        return None
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _int_or_none(val) -> Optional[int]:
+    try:
+        return int(val) if val is not None else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _dict_to_signal(d: dict) -> ParsedSignal:
+    d2 = {k: v for k, v in d.items() if k in ParsedSignal.__dataclass_fields__}
+    return ParsedSignal(**d2)

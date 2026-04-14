@@ -130,7 +130,7 @@ class Config:
     ci_url = "http://localhost:8080"
     ci_username = "ram"
     ci_job_name = "unified"
-    ci_token = "112d8a96a5b428820981a9cb31647dabbd" if isM1() else "11002dbdc4d4e5f1770d1a535b5f728a5c"
+    ci_token = "116af1b53758ca7aa8db6098e6a36b05fc" if isM1() else "11002dbdc4d4e5f1770d1a535b5f728a5c"
     fyers_log_path = os.path.join(root_directory,"fyers_reserved") #"/Users/ramkishore.gollakota/Documents/algo/Fyers/fyers_reserved"
     logger_path = os.path.join(root_directory,"Trades",date.today().strftime("%Y-%m-%d")) #os.path.join("/Users/ramkishore.gollakota/Documents/algo/Fyers/Trades",date.today().strftime("%Y-%m-%d"))
     current_day_yml = os.path.join(logger_path, "config_"+date.today().strftime("%Y-%m-%d")+".yml")
@@ -201,7 +201,7 @@ class Config:
     # code check in place for not to average when its a breakout trade
     accounts_breakout_strategy = [
         AccountConfig(name="[ SAI_LIVE ]",client_id=SAI_CLIENT_ID,secret_key=SAI_SECRET_KEY,access_token=SAI_ACCESS_TOKEN,quantity_banknifty=SAI_BANKNIFTY_QTY,quantity_nifty=SAI_NIFTY_QTY,quantity_midcpnifty=SAI_MIDCPNIFTY_QTY,quantity_finnifty=SAI_FINNIFTY_QTY,quantity_bajfinance=SAI_BAJFINANCE_QTY,quantity_sensex=SAI_SENSEX_QTY,paper_trade=True,squareoff_at_first_target=False,await_next_target=True,aggressive_trail=True,config_type="Breakout"),
-        AccountConfig(name="[ RAM_LIVE ]",client_id=RAM_CLIENT_ID,secret_key=RAM_SECRET_KEY,access_token=RAM_ACCESS_TOKEN,quantity_banknifty=RAM_BANKNIFTY_QTY,quantity_nifty=RAM_NIFTY_QTY,quantity_midcpnifty=RAM_MIDCPNIFTY_QTY,quantity_finnifty=RAM_FINNIFTY_QTY,quantity_bajfinance=RAM_BAJFINANCE_QTY,quantity_sensex=RAM_SENSEX_QTY,paper_trade=False,squareoff_at_first_target=True,trade_banknifty=True,trade_bajfinance=False,trade_finnifty=False,trade_midcpnifty=False,trade_nifty=False,trade_sensex=False,config_type="Breakout"),
+        AccountConfig(name="[ RAM_LIVE ]",client_id=RAM_CLIENT_ID,secret_key=RAM_SECRET_KEY,access_token=RAM_ACCESS_TOKEN,quantity_banknifty=RAM_BANKNIFTY_QTY,quantity_nifty=RAM_NIFTY_QTY,quantity_midcpnifty=RAM_MIDCPNIFTY_QTY,quantity_finnifty=RAM_FINNIFTY_QTY,quantity_bajfinance=RAM_BAJFINANCE_QTY,quantity_sensex=RAM_SENSEX_QTY,paper_trade=True,squareoff_at_first_target=True,trade_banknifty=True,trade_bajfinance=False,trade_finnifty=False,trade_midcpnifty=False,trade_nifty=False,trade_sensex=False,config_type="Breakout"),
 
         AccountConfig(name="[ SAI's Demat1 ]",client_id=SAI_CLIENT_ID,secret_key=SAI_SECRET_KEY,access_token=SAI_ACCESS_TOKEN,quantity_banknifty=FREEZE_QUANTITY_BANKNIFTY*2,quantity_nifty=FREEZE_QUANTITY_NIFTY*2,quantity_midcpnifty=FREEZE_QUANTITY_MIDCPNIFTY*2,quantity_finnifty=FREEZE_QUANTITY_FINNIFTY*2,quantity_bajfinance=FREEZE_QUANTITY_BAJFINANCE*2,quantity_sensex=FREEZE_QUANTITY_SENSEX*2,paper_trade=True,squareoff_at_first_target=True,should_average=True,config_type="Breakout"),
         AccountConfig(name="[ RAM's Demat1 ]",client_id=RAM_CLIENT_ID,secret_key=RAM_SECRET_KEY,access_token=RAM_ACCESS_TOKEN,quantity_banknifty=FREEZE_QUANTITY_BANKNIFTY*2,quantity_nifty=FREEZE_QUANTITY_NIFTY*2,quantity_midcpnifty=FREEZE_QUANTITY_MIDCPNIFTY*2,quantity_finnifty=FREEZE_QUANTITY_FINNIFTY*2,quantity_bajfinance=FREEZE_QUANTITY_BAJFINANCE*2,quantity_sensex=FREEZE_QUANTITY_SENSEX*2,paper_trade=True,squareoff_at_first_target=True,config_type="Breakout"),

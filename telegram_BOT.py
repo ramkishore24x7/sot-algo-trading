@@ -40,12 +40,14 @@ from utils.clock import Clock
 from utils.constants import Config
 from utils.demat import Demat
 from utils.position import Position
+from utils.llm_signal_parser import LLMSignalParser, is_noise as llm_is_noise
 
 # # Remember to use your own values from my.telegram.org!
 # ram
 api_id = "24665115"
 api_hash = '4bb48e7b1dd0fcb763dfe9eb203a6216'
 bot_token = "6744137962:AAFOFp0rwyK-ddZ9NRFf0XlgCXgoQgAbyWU"
+BOT_USER_ID = int(bot_token.split(':')[0])  # 6744137962 — used to filter our own bot messages
 client = TelegramClient('anon', api_id, api_hash)
 messenger = TelegramClient('messenger', api_id, api_hash)
 qwerty_channel = -1001767848638
@@ -56,7 +58,7 @@ dictionary = enchant.Dict("en_US")
 ignore_typos_list = ["CE","PE","NIFTY","MIDCPNIFTY", "FIN", "FIN NIFTY","FINNIFTY","BAJFINANCE", "BAJAJAUTO", "SENSEX","SL","BANKNIFTY","TARGET1","ABORTING","IF","COULDNT","IF","DIDNT","REMANING","STOPLOSS","TODAYS","DONT","CMP","LTP","EXPCTED","ACC","PLEASS","THATS","TRENDLINE","HEREE","PNL","CMDS","AMAZINGG","FALLL","CONFIG","SJB","CMD","AUTH","KHATA", "HATHA", "VIDHI", "DISTIL", "TARGET2", "TARGET3", "ITM"]
 brokenSignal, brokenTargets, brokenSL = None, None, None
 
-bot_name = "SOT_BOTv7"
+bot_name = "SOT_BOTv8"
 bot  = f"{bot_name}.py"
 
 jenkins_url = Config.ci_url
@@ -80,7 +82,7 @@ name = __file__.split("/")[-1].split(".")[0]
 name_suffix = str(date.today()) + "_" + str(uuid.uuid4())
 log_file = Config.logger_path + "/" + name + "_" + name_suffix + ".log"
 
-buy_regex_pattern = 'buy.*|Bank.*|Nif.*|Fin.*|Baj.*|Nau.*'
+buy_regex_pattern = 'buy.*|Bank.*|Nif.*|Fin.*|Baj.*|Nau.*|Sen.*'
 target_regex_pattern = 'Traget.*|Target.*|Tatget.*|Taget.*|Taret.*|TARGWT.*|Targst.*'
 sl_regex_pattern = 'SL.*'
 spot_regex_pattern = r'spot\s+(\d+)'
@@ -108,6 +110,14 @@ console_handler.setFormatter(formatter)
 # add handlers
 logger.addHandler(console_handler)
 logger.addHandler(file_handler)
+
+# ── LLM Signal Parser ────────────────────────────────────────────────────────
+try:
+    llm_parser = LLMSignalParser()
+    logger.info("LLMSignalParser initialised successfully")
+except Exception as _llm_err:
+    logger.warning(f"LLMSignalParser not available: {_llm_err}. Falling back to regex only.")
+    llm_parser = None
 
 demats: Demat = []
 # range strategy deployed accounts
@@ -542,17 +552,17 @@ def launch_SOT_BOT(cmd):
         logger.info(triggered_build_info)
     else:
         logger.info("The current build is not a duplicate.")
-        triggered_build_info = build_jenkins_job(job_name, build_params)
-        sot_cmds.append({"CMD": str(cmd), "created_time": str(int(time.time())),"Build_Number": str(triggered_build_info)})
-        if triggered_build_info is not None:
-            triggered_build_info = f"Build: #{triggered_build_info} \n\nSIGNAL: \n- {build_params['SIGNAL']} \n\nAccounts Live: \n{accounts_live} \n\nSit Back & Relax! (: 🍀"
+        build_number = build_jenkins_job(job_name, build_params)
+        sot_cmds.append({"CMD": str(cmd), "created_time": str(int(time.time())),"Build_Number": str(build_number)})
+        if build_number is not None:
+            triggered_build_info = f"Build: #{build_number} \n\nSIGNAL: \n- {build_params['SIGNAL']} \n\nAccounts Live: \n{accounts_live} \n\nSit Back & Relax! (: 🍀"
             logger.info(triggered_build_info)
             # Auto-stream the log so you can watch the build in Telegram without polling manually
             threading.Thread(
                 target=stream_build_log,
-                args=(job_name, triggered_build_info),
+                args=(job_name, build_number),
                 daemon=True,
-                name=f"stream-{triggered_build_info}"
+                name=f"stream-{build_number}"
             ).start()
         else:
             chime.warning()
@@ -587,7 +597,7 @@ async def send_file(message,caption):
         logger.error(f"Error in send_file. {e}")
         logger.error(f"Error Trace: {traceback.print_exc()}")
 
-async def send_message(message,emergency=False,event_id=None):
+async def send_message(message,emergency=False,event_id=None,source_chat_id=None):
     message = re.sub(r'```', '', message).strip()
     if not messenger:
         logger.warning("messenger isn't initialised!")
@@ -605,8 +615,10 @@ async def send_message(message,emergency=False,event_id=None):
         
         if event_id is not None:
             message = f"[{bot_name}]: 🐯💬 \n\n{message}"
-            recent_message_link = f"https://t.me/c/{str(sot_channel)[4:]}/{event_id}"
-            message = f"<pre>{message}</pre><a href='{recent_message_link}'>SOT</a>"
+            _src = source_chat_id if source_chat_id else sot_channel
+            _src_label = "QWERTY" if _src == qwerty_channel else "SOT_TRIAL" if _src == sot_trial_channel else "SOT"
+            recent_message_link = f"https://t.me/c/{str(_src)[4:]}/{event_id}"
+            message = f"<pre>{message}</pre><a href='{recent_message_link}'>{_src_label}</a>"
             default_parsing = 'HTML'
         else:
             message = f"```[{bot_name}]: 🐯💬 \n\n{message}```"
@@ -730,6 +742,18 @@ def get_console_view(job_name, build_number=None):
         asyncio.run(send_message(message_content))
 
 
+def _thread_send(message, emergency=False):
+    """Send a Telegram message from a background thread via Bot API (no event loop needed)."""
+    import requests as _requests
+    try:
+        chat_id = sos_channel if emergency else qwerty_channel
+        text = message[:4000]  # Telegram max message length
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        _requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=10)
+    except Exception as e:
+        logger.error(f"_thread_send error: {type(e).__name__}: {e}")
+
+
 def stream_build_log(job_name, build_number, poll_interval=5, chunk_lines=20):
     """
     Stream a Jenkins build log to Telegram in real-time.
@@ -749,13 +773,16 @@ def stream_build_log(job_name, build_number, poll_interval=5, chunk_lines=20):
         chunk_lines:   Max lines per Telegram message (default 20, keeps messages readable)
     """
     try:
+        build_number = int(build_number)
         job = jenkins.get_job(job_name)
         if job is None:
-            asyncio.run(send_message(f"Job `{job_name}` not found."))
+            _thread_send(f"Job `{job_name}` not found.")
             return
 
+        # Wait briefly for Jenkins to register the build
+        time.sleep(3)
         build = job.get_build(build_number)
-        asyncio.run(send_message(f"📡 Streaming `{job_name}` #{build_number}... (every {poll_interval}s)"))
+        _thread_send(f"📡 Streaming `{job_name}` #{build_number}... (every {poll_interval}s)")
 
         sent_offset = 0  # character offset of how much console text we've already sent
 
@@ -768,7 +795,7 @@ def stream_build_log(job_name, build_number, poll_interval=5, chunk_lines=20):
                 lines = new_text.splitlines()
                 for i in range(0, len(lines), chunk_lines):
                     chunk = "\n".join(lines[i:i + chunk_lines])
-                    asyncio.run(send_message(f"```\n{chunk}\n```"))
+                    _thread_send(f"```\n{chunk}\n```")
                 sent_offset = len(full_log)
 
             if not build.is_running():
@@ -776,9 +803,7 @@ def stream_build_log(job_name, build_number, poll_interval=5, chunk_lines=20):
                 status = build.get_status()
                 icon = "✅" if status == "SUCCESS" else "❌"
                 duration_secs = build.get_duration().seconds if build.get_duration() else "?"
-                asyncio.run(send_message(
-                    f"{icon} `{job_name}` #{build_number} finished: **{status}** in {duration_secs}s"
-                ))
+                _thread_send(f"{icon} `{job_name}` #{build_number} finished: **{status}** in {duration_secs}s")
                 break
 
             time.sleep(poll_interval)
@@ -1359,6 +1384,150 @@ def extract_nse_instrument(data):
     match = re.search(r'(NSE:\S+)', text)
     return match.group(0) if match else None
 
+def _position_from_llm(signal) -> Position:
+    """Convert a ParsedSignal to a Position object for SOT_BOT."""
+    entry = signal.entry_high  # use the higher end of range as the working price
+    t1 = signal.targets[0] if len(signal.targets) > 0 else entry + 15
+    t2 = signal.targets[1] if len(signal.targets) > 1 else t1 + 15
+    t3 = signal.targets[2] if len(signal.targets) > 2 else t2 + 15
+    return Position(
+        instrument=signal.instrument,
+        strike=signal.strike,
+        ce_pe=signal.ce_pe,
+        entry_price=entry,
+        second_entry_price=signal.entry_low if signal.entry_low != signal.entry_high else None,
+        stoploss=signal.sl,
+        target1=t1,
+        target2=t2,
+        target3=t3,
+        isBreakoutStrategy=(signal.strategy == "BREAKOUT"),
+        enterFewPointsAbove=False,
+        spot=None,
+        exit_strategy=None,
+    )
+
+
+async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None):
+    """Route LLM-parsed intent to the right action."""
+    global llm_parser
+
+    intent = signal.intent
+    conf   = signal.confidence
+
+    sc = source_chat_id  # shorthand
+
+    # ── NEW_SIGNAL ───────────────────────────────────────────────────────────
+    if intent == "NEW_SIGNAL":
+        if signal.sl_deferred:
+            llm_parser.signal_pending(signal)
+            await send_message(
+                f"⏳ LLM: New signal received but SL is deferred.\n"
+                f"Waiting for mentor to post SL before triggering.\n\n"
+                f"{signal.summary()}",
+                event_id=event_id, source_chat_id=sc
+            )
+            logger.info(f"[LLM] Signal held — awaiting SL: {signal.summary()}")
+            return
+
+        if not signal.is_actionable():
+            await send_message(
+                f"⚠️ LLM: Incomplete signal (confidence={conf:.0%}).\n"
+                f"{signal.summary()}\n\nRaw:\n{raw_message}",
+                event_id=event_id, source_chat_id=sc
+            )
+            return
+
+        position = _position_from_llm(signal)
+        logger.info(f"[LLM] Firing SOT_BOT → {signal.summary()}")
+        await send_message(
+            f"🤖 LLM Signal Parsed ({conf:.0%}):\n{signal.summary()}",
+            event_id=event_id, source_chat_id=sc
+        )
+        trigger_SOT_BOT(position)
+        llm_parser.signal_fired(signal)
+
+    # ── SL_RESOLVED ──────────────────────────────────────────────────────────
+    elif intent == "SL_RESOLVED":
+        resolved = llm_parser.signal_resolved(signal.sl)
+        if resolved and resolved.is_actionable():
+            position = _position_from_llm(resolved)
+            logger.info(f"[LLM] SL resolved, firing SOT_BOT → {resolved.summary()}")
+            await send_message(
+                f"🤖 LLM: SL received, triggering pending signal.\n{resolved.summary()}",
+                event_id=event_id, source_chat_id=sc
+            )
+            trigger_SOT_BOT(position)
+            llm_parser.signal_fired(resolved)
+        else:
+            logger.info(f"[LLM] SL_RESOLVED but no pending signal to complete")
+
+    # ── REENTER ──────────────────────────────────────────────────────────────
+    elif intent == "REENTER":
+        active = llm_parser.get_active()
+        if active and active.is_actionable():
+            position = _position_from_llm(active)
+            logger.info(f"[LLM] REENTER → {active.summary()}")
+            await send_message(
+                f"🔁 LLM: Re-entry signal detected.\nRe-triggering: {active.summary()}",
+                event_id=event_id, source_chat_id=sc
+            )
+            trigger_SOT_BOT(position)
+        else:
+            await send_message(
+                f"⚠️ LLM: Re-enter received but no active signal in context.\n\nRaw: {raw_message}",
+                event_id=event_id, source_chat_id=sc
+            )
+
+    # ── UPDATE_SL ────────────────────────────────────────────────────────────
+    elif intent == "UPDATE_SL":
+        active = llm_parser.get_active()
+        await send_message(
+            f"📢 LLM: SL Update detected.\n"
+            f"New SL: {signal.sl}\n"
+            f"Active trade: {active.summary() if active else 'unknown'}\n\n"
+            f"⚠️ Manual action may be needed in running SOT_BOT.",
+            event_id=event_id, source_chat_id=sc
+        )
+
+    # ── UPDATE_TARGET ────────────────────────────────────────────────────────
+    elif intent == "UPDATE_TARGET":
+        await send_message(
+            f"📢 LLM: Target Update detected.\n"
+            f"New targets: {signal.targets}\n\n"
+            f"⚠️ Review running SOT_BOT if needed.",
+            event_id=event_id, source_chat_id=sc
+        )
+
+    # ── CANCEL ───────────────────────────────────────────────────────────────
+    elif intent == "CANCEL":
+        pending = llm_parser.get_pending()
+        if pending:
+            llm_parser.context.clear_pending()
+            await send_message(
+                f"🚫 LLM: CANCEL received. Pending signal dropped.\n{pending.summary()}",
+                event_id=event_id, source_chat_id=sc
+            )
+        else:
+            await send_message(
+                f"🚫 LLM: CANCEL/IGNORE received.\n"
+                f"⚠️ Stop the active SOT_BOT build if a trade is running.\n\nRaw: {raw_message}",
+                emergency=True,
+                event_id=event_id, source_chat_id=sc
+            )
+
+    # ── PARTIAL_EXIT / FULL_EXIT ─────────────────────────────────────────────
+    elif intent in ("PARTIAL_EXIT", "FULL_EXIT"):
+        await send_message(
+            f"🚨 LLM: {intent} detected!\n\n{signal.notes}\n\nRaw: {raw_message}",
+            emergency=True,
+            event_id=event_id, source_chat_id=sc
+        )
+
+    # ── NOISE ────────────────────────────────────────────────────────────────
+    elif intent == "NOISE":
+        logger.debug(f"[LLM] NOISE — skipped: {raw_message[:60]}")
+
+
 async def analyse_event(event):
     global recent_loss_postion
     global latest_live_position
@@ -1380,11 +1549,27 @@ async def analyse_event(event):
         message = event.raw_text.upper()
         message_replied_for = None
 
+        # Skip messages sent by our own bot (via Bot API) — e.g. build log streams
+        if getattr(event.message, 'sender_id', None) == BOT_USER_ID:
+            logger.debug(f"Ignored own bot message (sender_id={BOT_USER_ID})")
+            return
+
         if message.upper().startswith("[SOT_BOT") and "FIXED SIGNAL" not in message.upper() and "KHATA KHATA HATHA VIDHI!" not in message.upper() and "LIVE POSITION" not in message.upper():
             logger.debug(f"Ignored SOT_BOT Message: {message}")
             return
         event_id = event.message.id
-        
+
+        # ── LLM intent routing (signal channels) ──
+        if llm_parser and event.chat_id in (sot_channel, sot_trial_channel, qwerty_channel):
+            is_edit = hasattr(event, 'message') and getattr(event.message, 'edit_date', None) is not None
+            llm_signal = llm_parser.parse(actual_message, msg_id=event_id, is_edit=is_edit)
+            if llm_signal.intent != "NOISE":
+                await handle_llm_intent(llm_signal, event_id, actual_message, source_chat_id=event.chat_id)
+                # For clear NEW_SIGNAL with high confidence, let LLM handle it
+                # and skip the regex path to avoid double-triggering
+                if llm_signal.intent == "NEW_SIGNAL" and llm_signal.confidence >= 0.85 and not llm_signal.sl_deferred:
+                    return
+
         if event.chat_id == sos_channel:
             logger.info("sending redirection")
             asyncio.run(send_message("SOS is for broadcast ONLY. View reverts on ",emergency=True,event_id="redirect"))
