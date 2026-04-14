@@ -47,7 +47,9 @@ from utils.llm_signal_parser import LLMSignalParser, is_noise as llm_is_noise
 api_id = "24665115"
 api_hash = '4bb48e7b1dd0fcb763dfe9eb203a6216'
 bot_token = "6744137962:AAFOFp0rwyK-ddZ9NRFf0XlgCXgoQgAbyWU"
-BOT_USER_ID = int(bot_token.split(':')[0])  # 6744137962 — used to filter our own bot messages
+# Compiled once at startup — used in analyse_event to skip build/log output
+_LOG_TS_RE = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[,.]?\d* - (INFO|WARNING|ERROR|DEBUG)\b')
+_BUILD_HDR_RE = re.compile(r'^(STARTED BY USER|RUNNING AS SYSTEM|BUILDING IN WORKSPACE|BOT_TOKEN IN USE)', re.IGNORECASE)
 client = TelegramClient('anon', api_id, api_hash)
 messenger = TelegramClient('messenger', api_id, api_hash)
 qwerty_channel = -1001767848638
@@ -557,13 +559,6 @@ def launch_SOT_BOT(cmd):
         if build_number is not None:
             triggered_build_info = f"Build: #{build_number} \n\nSIGNAL: \n- {build_params['SIGNAL']} \n\nAccounts Live: \n{accounts_live} \n\nSit Back & Relax! (: 🍀"
             logger.info(triggered_build_info)
-            # Auto-stream the log so you can watch the build in Telegram without polling manually
-            threading.Thread(
-                target=stream_build_log,
-                args=(job_name, build_number),
-                daemon=True,
-                name=f"stream-{build_number}"
-            ).start()
         else:
             chime.warning()
             triggered_build_info = "Failed to Build ):"
@@ -742,14 +737,15 @@ def get_console_view(job_name, build_number=None):
         asyncio.run(send_message(message_content))
 
 
-def _thread_send(message, emergency=False):
-    """Send a Telegram message from a background thread via Bot API (no event loop needed)."""
+def _thread_send(message, chat_id=None):
+    """Send a Telegram message from a background thread via Bot API (no event loop needed).
+    Defaults to sos_channel so build logs don't re-enter the LLM event handler."""
     import requests as _requests
     try:
-        chat_id = sos_channel if emergency else qwerty_channel
-        text = message[:4000]  # Telegram max message length
+        target = chat_id if chat_id is not None else sos_channel
+        text = message[:4000]
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        _requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=10)
+        _requests.post(url, json={"chat_id": target, "text": text, "parse_mode": "HTML"}, timeout=10)
     except Exception as e:
         logger.error(f"_thread_send error: {type(e).__name__}: {e}")
 
@@ -776,13 +772,13 @@ def stream_build_log(job_name, build_number, poll_interval=5, chunk_lines=20):
         build_number = int(build_number)
         job = jenkins.get_job(job_name)
         if job is None:
-            _thread_send(f"Job `{job_name}` not found.")
+            _thread_send(f"Job <code>{job_name}</code> not found.")
             return
 
         # Wait briefly for Jenkins to register the build
         time.sleep(3)
         build = job.get_build(build_number)
-        _thread_send(f"📡 Streaming `{job_name}` #{build_number}... (every {poll_interval}s)")
+        _thread_send(f"📡 Streaming <code>{job_name}</code> #{build_number}... (every {poll_interval}s)")
 
         sent_offset = 0  # character offset of how much console text we've already sent
 
@@ -791,19 +787,19 @@ def stream_build_log(job_name, build_number, poll_interval=5, chunk_lines=20):
             new_text = full_log[sent_offset:]
 
             if new_text.strip():
-                # Split into lines and send in chunks so messages stay readable
                 lines = new_text.splitlines()
                 for i in range(0, len(lines), chunk_lines):
                     chunk = "\n".join(lines[i:i + chunk_lines])
-                    _thread_send(f"```\n{chunk}\n```")
+                    # HTML escape special chars, then wrap in <pre> for monospace rendering
+                    safe_chunk = chunk.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    _thread_send(f"<pre>{safe_chunk}</pre>")
                 sent_offset = len(full_log)
 
             if not build.is_running():
-                # Build finished — send final status
                 status = build.get_status()
                 icon = "✅" if status == "SUCCESS" else "❌"
                 duration_secs = build.get_duration().seconds if build.get_duration() else "?"
-                _thread_send(f"{icon} `{job_name}` #{build_number} finished: **{status}** in {duration_secs}s")
+                _thread_send(f"{icon} <code>{job_name}</code> #{build_number} finished: <b>{status}</b> in {duration_secs}s")
                 break
 
             time.sleep(poll_interval)
@@ -1248,12 +1244,12 @@ def remove_multiple_instances(incoming_message,event_id=None):
                 logger.debug(f"No second occurrence found for {word_to_replace}.")
 
 # SOT & qerty channels
-@client.on(events.NewMessage(chats=[sot_channel, qwerty_channel, sos_channel, sot_trial_channel]))
+@client.on(events.NewMessage(chats=[sot_channel, qwerty_channel, sot_trial_channel]))
 async def new_message_event_handler(event):
     await analyse_event(event)
 
 
-@client.on(events.MessageEdited(chats=[sot_channel, qwerty_channel, sos_channel, sot_trial_channel]))
+@client.on(events.MessageEdited(chats=[sot_channel, qwerty_channel, sot_trial_channel]))
 async def edited_message_event_handler(event):
     # chime.warning()
     logger.info(f"[#SOT PREMIUM]: EDITED MESSAGE!!!")
@@ -1549,11 +1545,6 @@ async def analyse_event(event):
         message = event.raw_text.upper()
         message_replied_for = None
 
-        # Skip messages sent by our own bot (via Bot API) — e.g. build log streams
-        if getattr(event.message, 'sender_id', None) == BOT_USER_ID:
-            logger.debug(f"Ignored own bot message (sender_id={BOT_USER_ID})")
-            return
-
         if message.upper().startswith("[SOT_BOT") and "FIXED SIGNAL" not in message.upper() and "KHATA KHATA HATHA VIDHI!" not in message.upper() and "LIVE POSITION" not in message.upper():
             logger.debug(f"Ignored SOT_BOT Message: {message}")
             return
@@ -1570,15 +1561,11 @@ async def analyse_event(event):
                 if llm_signal.intent == "NEW_SIGNAL" and llm_signal.confidence >= 0.85 and not llm_signal.sl_deferred:
                     return
 
-        if event.chat_id == sos_channel:
-            logger.info("sending redirection")
-            asyncio.run(send_message("SOS is for broadcast ONLY. View reverts on ",emergency=True,event_id="redirect"))
-        # global recent_message_link
-        # if event.chat_id == qwerty_channel:
-        #     # Get the link to the original message
-        #     recent_message_link = f"https://t.me/c/{str(qwerty_channel)[4:]}/{event.message.id}"
-        
-        # if ".PY ACTIVATED" not in message:
+        # Skip raw build/log output sent by SOT_BOTv8.py to this channel
+        if _LOG_TS_RE.match(actual_message) or _BUILD_HDR_RE.match(actual_message):
+            logger.debug(f"Skipping build/log message: {actual_message[:60]}")
+            return
+
         check_for_typos(message,event_id=event_id)
 
         if event.is_reply:
@@ -1809,6 +1796,15 @@ async def analyse_event(event):
                 message_content = f"Couldn't Find the build number in [VIEW] recieved message: '{message}'"
                 logger.info(message_content)
                 asyncio.run(send_message(message_content))
+        elif "STREAM" in message:
+            build_number_received = re.search(r"STREAM (\d+)", message)
+            build_number_received = int(build_number_received.group(1)) if build_number_received else None
+            if not build_number_received and message_replied_for is not None:
+                build_number_received = grep_build_number(message_replied_for)
+            if build_number_received:
+                threading.Thread(target=stream_build_log, args=(job_name, build_number_received), daemon=True, name=f"stream-{build_number_received}").start()
+            else:
+                asyncio.run(send_message(f"Couldn't find build number in [STREAM] message: '{message}'"))
         elif message == "STOP" and message_replied_for is not None:
             build_number_received = grep_build_number(message_replied_for)
             if build_number_received:
