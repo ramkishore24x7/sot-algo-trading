@@ -212,6 +212,9 @@ def is_noise(text: str) -> bool:
     # Short price-hit messages: "395🚀🚀" "84000 target was also done"
     if len(t) < 40 and re.fullmatch(r'[\d\s🚀💸✅\+\-\.!,]+', t):
         return True
+    # Profit/points announcements: "35 points", "100+ points done", "20 points book done"
+    if re.fullmatch(r'\d+\+?\s*points?[\s\w!🚀]*', t, re.IGNORECASE):
+        return True
     return False
 
 
