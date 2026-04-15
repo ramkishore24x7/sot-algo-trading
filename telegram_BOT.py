@@ -1662,10 +1662,10 @@ async def analyse_event(event):
                 await handle_llm_intent(llm_signal, event_id, actual_message,
                                         source_chat_id=event.chat_id,
                                         reply_to_msg_id=reply_to_msg_id)
-                # LLM fired a job — always skip regex path for NEW_SIGNAL to
-                # avoid double-trigger or spurious "Missing Signal" messages
-                if llm_signal.intent == "NEW_SIGNAL":
-                    return
+                # LLM handled this message — skip regex path for any non-NOISE
+                # intent to avoid double-triggers (REENTER gets reclassified to
+                # NEW_SIGNAL inside handle_llm_intent, after this check runs)
+                return
 
         # Skip raw build/log output sent by SOT_BOTv8.py to this channel
         if _LOG_TS_RE.match(actual_message) or _BUILD_HDR_RE.match(actual_message):
