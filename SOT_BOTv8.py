@@ -556,6 +556,11 @@ class TradeHandler:
         position.entry_price = self.current_entry_price
         send_order_placement_erros("ENTER POSITION", trade_manager.enter_position(position, self.current_entry_price))
         entered_trade = True
+        tgts_str = "/".join(str(t) for t in targets_list)
+        logger.critical(
+            f"[TRADE_ENTRY] instrument={self.option} | strategy={'BREAKOUT' if onCrossingAbove else ('RANGE' if second_entry_price else 'EXACT')} "
+            f"| fill={self.current_entry_price} | sl={self.stop_loss} | targets={tgts_str} | qty={qty}"
+        )
 
         # Late-entry guard: if we're already above T1 at fill time (e.g. re-entry
         # after a spike), skip T1 booking and go straight to SL-at-cost.
@@ -591,12 +596,23 @@ class TradeHandler:
         """Block the calling thread until the trade is closed."""
         self._done.wait()
 
-    def _finish(self):
-        """Deregister from dispatcher and unblock wait()."""
+    def _finish(self, exit_price: float = None, reason: str = "unknown"):
+        """Deregister from dispatcher and unblock wait(). Idempotent."""
         global entered_trade
+        if self._done.is_set():
+            return  # already finished — guard against double-call
         dispatcher.unsubscribe(self.on_price)
         entered_trade = False
         self._done.set()
+        ep   = exit_price or self.ltpHigh
+        pnl  = round(ep - self.avg_price, 1)
+        sign = "+" if pnl >= 0 else ""
+        hits = [f"T{i+1}" for i, b in enumerate(_booked) if b] or ["none"]
+        logger.critical(
+            f"[TRADE_CLOSED] instrument={self.option} | fill={self.avg_price} | exit={ep} "
+            f"| reason={reason} | pnl_pts={sign}{pnl} | peak_gain=+{self.peak_gain} "
+            f"| targets_hit={','.join(hits)}"
+        )
 
     # ------------------------------------------------------------------
     # on_price — the heart of the change
@@ -636,12 +652,14 @@ class TradeHandler:
                 print("Closed: ", self.option)
                 smiley = "🤑" if live_pnl > 0 else "🤐 khata khata hatha vidhi!"
                 asyncio.run(send_message(f"{gain} Points! {smiley} | Peak Gain: {self.peak_gain}"))
+                reason = "EOD_SQUAREOFF" if not Clock.is_time_less_than(trade_exit_hour, trade_exit_minute) else "SL"
                 if not re_entered and not self._soldAtTarget1 and re_entry:
-                    self._finish()
+                    self._finish(exit_price=cmp, reason=reason)
                     check_re_entry(self.option)
                     return
                 elif re_entered and not self._soldAtTarget1:
                     logger.critical("Phew! SL hit for the second time, no more re-entries.")
+                self._finish(exit_price=cmp, reason=reason)
 
             elif round(cmp) <= self.stop_loss_aggressive_trailing and not self._sold_aggressive_positions:
                 send_order_placement_erros("SQUARE-OFF AGGRESSIVE TRAIL POSITION", trade_manager.square_off_position_aggressive_trail(position, cmp))
@@ -751,7 +769,7 @@ class TradeHandler:
                     if is_last:
                         logger.critical(f"Last target (T{i+1}={tgt}) hit! Closed at {cmp}/- ; Highest LTP: {self.ltpHigh}/-")
                         send_calculated_pnL()
-                        self._finish()
+                        self._finish(exit_price=cmp, reason=f"T{i+1}")
                         return
 
             # Check all accounts closed
@@ -760,7 +778,7 @@ class TradeHandler:
                 print("Closed: ", self.option)
                 logger.critical(f"Positions in all the accounts are now closed, stopping SOT_BOT!")
                 send_calculated_pnL()
-                self._finish()
+                self._finish(exit_price=cmp, reason="all_accounts_closed")
 
         except Exception as err:
             logger.error(f"Error @TradeHandler.on_price: {err}")

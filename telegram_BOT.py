@@ -79,6 +79,13 @@ sot_cmds = []
 recent_loss_postion = None
 recent_message_link = None
 
+# EOD session counters — incremented as intents are handled
+_eod_signals_fired    = 0   # NEW_SIGNAL / SL_RESOLVED that triggered SOT_BOT
+_eod_reenters         = 0   # REENTER triggers
+_eod_sl_updates       = 0   # UPDATE_SL messages handled
+_eod_exits            = 0   # FULL_EXIT / PARTIAL_EXIT messages handled
+_eod_noise_skipped    = 0   # messages dropped by pre-filter (rough count)
+
 # Configure the logging settings
 name = __file__.split("/")[-1].split(".")[0]
 name_suffix = str(date.today()) + "_" + str(uuid.uuid4())
@@ -1193,6 +1200,12 @@ def wrapup_day():
     generate_SOT_Summary()
     time.sleep(2)
 
+    logger.critical(
+        f"[EOD_SUMMARY] signals_fired={_eod_signals_fired} | reenters={_eod_reenters} "
+        f"| sl_updates={_eod_sl_updates} | exits={_eod_exits} "
+        f"| builds_triggered={len(sot_cmds)}"
+    )
+
     logger.info(f"Received Stop Trading Singal - Generating Today's PnL Report!")
     generate_PnL_report()
     time.sleep(2)
@@ -1434,6 +1447,8 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None, 
     """Route LLM-parsed intent to the right action."""
     global llm_parser
 
+    global _eod_signals_fired, _eod_reenters, _eod_sl_updates, _eod_exits
+
     intent = signal.intent
     conf   = signal.confidence
 
@@ -1501,6 +1516,7 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None, 
         )
         trigger_SOT_BOT(position)
         llm_parser.signal_fired(signal, msg_id=event_id)
+        _eod_signals_fired += 1
 
     # ── SL_RESOLVED ──────────────────────────────────────────────────────────
     elif intent == "SL_RESOLVED":
@@ -1514,6 +1530,7 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None, 
             )
             trigger_SOT_BOT(position)
             llm_parser.signal_fired(resolved, msg_id=event_id)
+            _eod_signals_fired += 1
         else:
             logger.info(f"[LLM] SL_RESOLVED but no pending signal to complete")
 
@@ -1545,6 +1562,7 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None, 
             )
             trigger_SOT_BOT(position)
             llm_parser.signal_fired(merged, msg_id=event_id)
+            _eod_reenters += 1
         else:
             await send_message(
                 f"⚠️ LLM: Re-enter received but no reference signal found.\n\nRaw: {raw_message}",
@@ -1563,6 +1581,7 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None, 
             f"⚠️ Manual action may be needed in running SOT_BOT.",
             event_id=event_id, source_chat_id=sc
         )
+        _eod_sl_updates += 1
 
     # ── UPDATE_TARGET ────────────────────────────────────────────────────────
     elif intent == "UPDATE_TARGET":
@@ -1597,6 +1616,7 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None, 
             emergency=True,
             event_id=event_id, source_chat_id=sc
         )
+        _eod_exits += 1
 
     # ── NOISE ────────────────────────────────────────────────────────────────
     elif intent == "NOISE":
