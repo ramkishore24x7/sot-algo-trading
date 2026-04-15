@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, date, time as dtime
 from typing import Optional
@@ -130,22 +131,73 @@ class DayContext:
 
     MAX_CONTEXT = 12   # max messages to send to LLM
 
-    def __init__(self):
-        self._reset()
+    def __init__(self, persist_path: Optional[str] = None):
+        self._persist_path = persist_path
+        self._reset(save=False)  # don't write on first init — caller loads first
 
-    def _reset(self):
-        self.messages: list[dict] = []     # filtered meaningful messages
-        self.active_signal: Optional[dict] = None    # currently running trade
-        self.pending_signal: Optional[dict] = None   # awaiting SL before firing
-        self.signal_store: dict = {}       # msg_id → signal dict (for reply-chain lookup)
+    def _reset(self, save: bool = True):
+        self.messages: list[dict] = []
+        self.active_signal: Optional[dict] = None
+        self.pending_signal: Optional[dict] = None
+        self.signal_store: dict = {}       # msg_id → signal dict (reply-chain)
         self._date = date.today()
         logger.info("DayContext reset for new day/session")
+        if save:
+            self._save()
+
+    def _save(self):
+        """Atomically persist context state to disk so restarts can reload it."""
+        if not self._persist_path:
+            return
+        state = {
+            "date":          str(self._date),
+            "messages":      self.messages,
+            "active_signal": self.active_signal,
+            "pending_signal": self.pending_signal,
+            "signal_store":  {str(k): v for k, v in self.signal_store.items()},
+        }
+        try:
+            dir_ = os.path.dirname(self._persist_path)
+            with tempfile.NamedTemporaryFile("w", dir=dir_, delete=False,
+                                             suffix=".tmp") as f:
+                json.dump(state, f, indent=2)
+                tmp = f.name
+            os.replace(tmp, self._persist_path)   # atomic on POSIX
+        except Exception as e:
+            logger.warning(f"[DayContext] Failed to persist state: {e}")
+
+    def _load(self):
+        """Reload today's context from disk if the file exists and is current."""
+        if not self._persist_path or not os.path.exists(self._persist_path):
+            return False
+        try:
+            with open(self._persist_path) as f:
+                state = json.load(f)
+            if state.get("date") != str(date.today()):
+                logger.info("[DayContext] Persisted state is from a previous day — ignoring.")
+                return False
+            self.messages      = state.get("messages", [])
+            self.active_signal = state.get("active_signal")
+            self.pending_signal = state.get("pending_signal")
+            # signal_store keys are stored as strings; convert back to int
+            self.signal_store  = {int(k): v for k, v in state.get("signal_store", {}).items()}
+            self._date         = date.today()
+            logger.info(
+                f"[DayContext] Restored from disk: "
+                f"{len(self.messages)} msgs, "
+                f"active={'yes' if self.active_signal else 'no'}, "
+                f"pending={'yes' if self.pending_signal else 'no'}, "
+                f"signal_store={len(self.signal_store)} entries"
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"[DayContext] Failed to load persisted state: {e}")
+            return False
 
     def _should_reset(self) -> bool:
         now = datetime.now()
         if now.date() != self._date:
             return True
-        # Reset at market open if we haven't yet today
         if now.time() >= MARKET_OPEN_TIME and self._date != date.today():
             return True
         return False
@@ -154,7 +206,7 @@ class DayContext:
         if self._should_reset():
             self._reset()
         if is_noise(text):
-            return  # don't pollute context with rockets
+            return
         entry = {
             "id": msg_id,
             "time": datetime.now().strftime("%H:%M"),
@@ -162,26 +214,32 @@ class DayContext:
             "edited": is_edit,
         }
         self.messages.append(entry)
-        # Keep only last MAX_CONTEXT
         if len(self.messages) > self.MAX_CONTEXT:
             self.messages = self.messages[-self.MAX_CONTEXT:]
+        # Messages are high-frequency — don't persist every tick, only on signals
+        # (signal_fired / signal_pending persist the important state changes)
 
     def set_active(self, signal: ParsedSignal):
         self.active_signal = signal.to_dict()
         self.pending_signal = None
+        self._save()
 
     def set_pending(self, signal: ParsedSignal):
         self.pending_signal = signal.to_dict()
+        self._save()
 
     def clear_active(self):
         self.active_signal = None
+        self._save()
 
     def clear_pending(self):
         self.pending_signal = None
+        self._save()
 
     def store_signal(self, msg_id: int, signal: ParsedSignal):
         """Store a fired signal keyed by its Telegram message ID."""
         self.signal_store[msg_id] = signal.to_dict()
+        self._save()
 
     def get_signal_by_id(self, msg_id: int):
         """Look up a previously fired signal by its Telegram message ID."""
@@ -334,7 +392,8 @@ class LLMSignalParser:
     Maintains per-day context automatically.
     """
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "claude-haiku-4-5-20251001"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "claude-haiku-4-5-20251001",
+                 persist_path: Optional[str] = None):
         key = (
             api_key
             or os.environ.get("ANTHROPIC_API_KEY")
@@ -348,7 +407,10 @@ class LLMSignalParser:
             )
         self.client = anthropic.Anthropic(api_key=key)
         self.model = model
-        self.context = DayContext()
+        self.context = DayContext(persist_path=persist_path)
+        # Restore today's context from disk if available (survives restarts)
+        if not self.context._load():
+            logger.info("[LLMSignalParser] No persisted context found — starting fresh.")
         logger.info(f"LLMSignalParser initialised with model={model}")
 
     def parse(self, text: str, msg_id: int = 0, is_edit: bool = False) -> ParsedSignal:

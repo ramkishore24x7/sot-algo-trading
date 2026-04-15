@@ -122,7 +122,9 @@ logger.addHandler(file_handler)
 
 # ── LLM Signal Parser ────────────────────────────────────────────────────────
 try:
-    llm_parser = LLMSignalParser()
+    llm_parser = LLMSignalParser(
+        persist_path=Config.logger_path + "/llm_context.json"
+    )
     logger.info("LLMSignalParser initialised successfully")
 except Exception as _llm_err:
     logger.warning(f"LLMSignalParser not available: {_llm_err}. Falling back to regex only.")

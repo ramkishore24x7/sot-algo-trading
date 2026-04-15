@@ -15,6 +15,7 @@ Run with:
 import sys
 import os
 import json
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -807,6 +808,131 @@ class ScreenshotEdgeCaseTests(unittest.TestCase):
     def test_keep_eye_on_is_noise_prefilter(self):
         self.assertTrue(is_noise("Keep an eye on this level"))
         self.assertTrue(is_noise("keep eye on 25300"))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. Context persistence (survive restarts)
+# ─────────────────────────────────────────────────────────────────────────────
+class PersistenceTests(unittest.TestCase):
+
+    def _tmp_path(self):
+        f = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        f.close()
+        os.unlink(f.name)   # remove so _load() sees it as absent initially
+        self.addCleanup(lambda: os.path.exists(f.name) and os.unlink(f.name))
+        return f.name
+
+    def _sig(self, instrument="NIFTY", entry_low=215, entry_high=220):
+        return ParsedSignal(
+            intent="NEW_SIGNAL", instrument=instrument, strike="25500",
+            ce_pe="CE", strategy="RANGE", entry_low=entry_low,
+            entry_high=entry_high, targets=[230, 240, 255], sl=204,
+        )
+
+    def test_no_persist_path_no_crash(self):
+        """DayContext without persist_path works exactly as before."""
+        ctx = DayContext()
+        sig = self._sig()
+        ctx.set_active(sig)   # should not raise
+        self.assertIsNotNone(ctx.active_signal)
+
+    def test_active_signal_survives_reload(self):
+        """active_signal written on set_active() is restored on _load()."""
+        path = self._tmp_path()
+        ctx1 = DayContext(persist_path=path)
+        ctx1.set_active(self._sig())
+        self.assertTrue(os.path.exists(path))
+
+        ctx2 = DayContext(persist_path=path)
+        loaded = ctx2._load()
+        self.assertTrue(loaded)
+        self.assertIsNotNone(ctx2.active_signal)
+        self.assertEqual(ctx2.active_signal["instrument"], "NIFTY")
+
+    def test_pending_signal_survives_reload(self):
+        path = self._tmp_path()
+        ctx1 = DayContext(persist_path=path)
+        ctx1.set_pending(self._sig())
+
+        ctx2 = DayContext(persist_path=path)
+        ctx2._load()
+        self.assertIsNotNone(ctx2.pending_signal)
+
+    def test_signal_store_survives_reload(self):
+        """signal_store (reply-chain map) is restored with int keys."""
+        path = self._tmp_path()
+        ctx1 = DayContext(persist_path=path)
+        ctx1.store_signal(99008, self._sig(instrument="NIFTY"))
+        ctx1.store_signal(99011, self._sig(instrument="SENSEX"))
+
+        ctx2 = DayContext(persist_path=path)
+        ctx2._load()
+        self.assertIn(99008, ctx2.signal_store)
+        self.assertIn(99011, ctx2.signal_store)
+        self.assertEqual(ctx2.signal_store[99008]["instrument"], "NIFTY")
+        self.assertEqual(ctx2.signal_store[99011]["instrument"], "SENSEX")
+
+    def test_stale_date_not_loaded(self):
+        """Persisted file from yesterday must NOT be restored."""
+        path = self._tmp_path()
+        stale = {
+            "date": "2020-01-01",   # obviously old
+            "messages": [],
+            "active_signal": {"instrument": "NIFTY", "intent": "NEW_SIGNAL"},
+            "pending_signal": None,
+            "signal_store": {},
+        }
+        with open(path, "w") as f:
+            json.dump(stale, f)
+
+        ctx = DayContext(persist_path=path)
+        loaded = ctx._load()
+        self.assertFalse(loaded, "Stale date must not be loaded")
+        self.assertIsNone(ctx.active_signal)
+
+    def test_missing_file_returns_false(self):
+        """_load() on a non-existent file returns False without crashing."""
+        ctx = DayContext(persist_path="/tmp/nonexistent_llm_ctx_xyz.json")
+        self.assertFalse(ctx._load())
+
+    def test_clear_active_persists(self):
+        """clear_active() writes updated (null active) state to disk."""
+        path = self._tmp_path()
+        ctx1 = DayContext(persist_path=path)
+        ctx1.set_active(self._sig())
+        ctx1.clear_active()
+
+        ctx2 = DayContext(persist_path=path)
+        ctx2._load()
+        self.assertIsNone(ctx2.active_signal)
+
+    def test_parser_restores_context_on_init(self):
+        """LLMSignalParser with persist_path restores state automatically."""
+        path = self._tmp_path()
+
+        # First parser instance — fires a signal
+        p1 = _make_parser(_new_signal_json())
+        p1.context._persist_path = path
+        sig = ParsedSignal(
+            intent="NEW_SIGNAL", instrument="NIFTY", strike="25500", ce_pe="CE",
+            strategy="RANGE", entry_low=215, entry_high=220,
+            targets=[230, 240, 255], sl=204,
+        )
+        p1.signal_fired(sig, msg_id=1234)
+
+        # Second parser instance — simulates a restart
+        import anthropic as _anthropic
+        mock_client = MagicMock()
+        with patch.object(_anthropic, 'Anthropic', return_value=mock_client):
+            p2 = LLMSignalParser(api_key='test-key', persist_path=path)
+
+        active = p2.get_active()
+        self.assertIsNotNone(active, "active_signal must be restored after restart")
+        self.assertEqual(active.instrument, "NIFTY")
+
+        ref = p2.get_by_msg_id(1234)
+        self.assertIsNotNone(ref, "signal_store entry must be restored after restart")
+        self.assertEqual(ref.entry_low, 215)
 
 
 if __name__ == "__main__":
