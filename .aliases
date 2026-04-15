@@ -41,8 +41,28 @@ function ws_healthcheck { $ALGO_PYTHON $ALGO/ws_healthcheck.py "$@"; sleep 5; ex
 function WS_HEALTHCHECK { ws_healthcheck "$@"; }
 
 # WebSocket servers — background (detached, stdout+stderr → Trades/YYYY-MM-DD/<name>.out)
+_ws_port() {
+  case $1 in
+    banknifty_ws)  echo 4001 ;;
+    nifty_ws)      echo 4002 ;;
+    finnifty_ws)   echo 4003 ;;
+    bajfinance_ws) echo 4004 ;;
+    midcpnifty_ws) echo 4005 ;;
+    sensex_ws)     echo 4006 ;;
+  esac
+}
 _ws_bg() {
   local script=$1 name=$2
+  local port=$(_ws_port $name)
+  # kill any existing process holding the port
+  if [ -n "$port" ]; then
+    local old_pid=$(lsof -t -i:$port -sTCP:LISTEN 2>/dev/null)
+    if [ -n "$old_pid" ]; then
+      echo "$(date +%H:%M:%S) Killing existing $name (PID=$old_pid) on port $port..."
+      kill -9 $old_pid 2>/dev/null
+      sleep 1
+    fi
+  fi
   local logdir="$ALGO/Trades/$(date +%Y-%m-%d)"
   mkdir -p "$logdir"
   nohup $ALGO_PYTHON "$ALGO/$script" >> "$logdir/${name}.out" 2>&1 &
