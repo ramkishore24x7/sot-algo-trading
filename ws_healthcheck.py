@@ -1,200 +1,140 @@
+import argparse
 import datetime
 import os
+import subprocess
+import sys
 import time
 
-import chime
 import requests
 from utils.clock import Clock
 from utils.constants import Config
 
-bank_nifty = "NSE:NIFTYBANK-INDEX"
-nifty = "NSE:NIFTY50-INDEX"
-midcpnifty = "NSE:MIDCPNIFTY-INDEX"
-finnifty = "NSE:FINNIFTY-INDEX"
-bajfinance = "NSE:BAJFINANCE-EQ"
-sensex = "BSE:SENSEX-INDEX"
-unhealthy_timer = 15 # In seconds
+_ALGO_DIR = os.path.dirname(os.path.abspath(__file__))
 
-unhealthy_banknifty = 0
-unhealthy_nifty = 0
-unhealthy_midcpnifty = 0
-unhealthy_finnifty = 0
-unhealthy_bajfinance = 0
-unhealthy_sensex = 0
+bank_nifty  = "NSE:NIFTYBANK-INDEX"
+nifty       = "NSE:NIFTY50-INDEX"
+midcpnifty  = "NSE:MIDCPNIFTY-INDEX"
+finnifty    = "NSE:FINNIFTY-INDEX"
+bajfinance  = "NSE:BAJFINANCE-EQ"
+sensex      = "BSE:SENSEX-INDEX"
+
+unhealthy_timer = 15  # In seconds
+
+# ── supported instruments ────────────────────────────────────────────────────
+INSTRUMENTS = {
+	"BANKNIFTY":  {"instrument": bank_nifty,  "ws_key": "BANKNIFTY",  "script": "ws_fyers_BANKNIFTY_v3.py",  "kill": lambda: Config.kill_banknifty_ws},
+	"NIFTY":      {"instrument": nifty,       "ws_key": "NIFTY",      "script": "ws_fyers_NIFTY_v3.py",      "kill": lambda: Config.kill_nifty_ws},
+	"MIDCPNIFTY": {"instrument": midcpnifty,  "ws_key": "MIDCPNIFTY", "script": "ws_fyers_MIDCPNIFTY_v3.py", "kill": lambda: Config.kill_midcpnifty_ws},
+	"FINNIFTY":   {"instrument": finnifty,    "ws_key": "FINNIFTY",   "script": "ws_fyers_FINNIFTY_v3.py",   "kill": lambda: Config.kill_finnifty_ws},
+	"BAJFINANCE": {"instrument": bajfinance,  "ws_key": "BAJFINANCE", "script": "ws_fyers_BAJFINANCE_v3.py", "kill": lambda: Config.kill_bajfinance_ws},
+	"SENSEX":     {"instrument": sensex,      "ws_key": "SENSEX",     "script": "ws_fyers_SENSEX_v3.py",     "kill": lambda: Config.kill_sensex_ws},
+}
+
 startTime = datetime.time(9, 0, 0)
-endTime = datetime.time(15, 30, 0)
-skip_monitor = ["MIDCPNIFTY", "bajfinance"]
-def getLTP(instrument):
-	instrument_name = None
-	port_number = None
-	if "BANK" in instrument:
-		instrument_name = bank_nifty
-		port_number = Config.ws_map.get("BANKNIFTY", None)
-	elif "BAJF" in instrument:
-		instrument_name = bajfinance
-		port_number = Config.ws_map.get("BAJFINANCE", None)
-	elif "FINN" in instrument:
-		instrument_name = finnifty
-		port_number = Config.ws_map.get("FINNIFTY", None)
-	elif "MID" in instrument:
-		instrument_name = midcpnifty
-		port_number = Config.ws_map.get("MIDCPNIFTY", None)
-	elif "SENSEX" in instrument:
-		instrument_name = sensex
-		port_number = Config.ws_map.get("SENSEX", None)
-	else:
-		instrument_name = nifty
-		port_number = Config.ws_map.get("NIFTY", None)
+endTime   = datetime.time(15, 30, 0)
 
-	assert port_number is not None, f"No Port Nunber Configured for '{instrument_name}'"
-	# url = "http://localhost:4001/ltp?instrument=" + instrument if "NIFTYBANK" in instrument else "http://localhost:4002/ltp?instrument=" + instrument
-	url = f"http://localhost:{port_number}/ltp?instrument=" + instrument_name
-	data = None
+
+def getLTP(instrument_symbol, port_number):
+	url  = f"http://localhost:{port_number}/ltp?instrument={instrument_symbol}"
 	try:
 		resp = requests.get(url)
-		data = resp.json()
-		# print("data: ", data)
+		return resp.json()
 	except Exception as e:
 		print(datetime.datetime.now(), " Exception @getLTP:", e)
-	return data
-
-# def time_in_range(start, end, current):
-#     """Returns whether current is in the range [start, end]"""
-#     return start <= current <= end
+		return None
 
 
-def monitorHealth():
-	# time.sleep(15)
-	global unhealthy_banknifty
-	global unhealthy_nifty
-	global unhealthy_midcpnifty
-	global unhealthy_finnifty
-	global unhealthy_bajfinance
-	global unhealthy_sensex
-	NIFTY_LTP = []
-	MIDCPNIFTY_LTP = []
-	FINNIFTY_LTP = []
-	BANKNIFTY_LTP = []
-	BAJFINANCE_LTP = []
-	SENSEX_LTP = []
-	
+def _relaunch_ws(name: str):
+	"""Restart a WS server as a detached background subprocess."""
+	script = os.path.join(_ALGO_DIR, INSTRUMENTS[name]["script"])
+	log_name = INSTRUMENTS[name]["script"].replace(".py", "") + ".out"
+	log_path = os.path.join(Config.logger_path, log_name)
+	os.makedirs(Config.logger_path, exist_ok=True)
+	log_fh = open(log_path, "a")
+	proc = subprocess.Popen(
+		[sys.executable, script],
+		stdout=log_fh,
+		stderr=subprocess.STDOUT,
+		start_new_session=True,   # detach from healthcheck's process group
+	)
+	print(f"{Clock.tictoc()} {name} WS relaunched in background (PID={proc.pid})")
+
+
+def monitorHealth(watch: set):
+	unhealthy = {k: 0 for k in watch}
+	ltps      = {k: [] for k in watch}
+
 	while Clock.time_in_range(startTime, endTime, datetime.datetime.now().time()):
-		bn_ltp = getLTP(bank_nifty)
-		n_ltp = getLTP(nifty)
-		fin_ltp = getLTP(finnifty)
-		sen_ltp = getLTP(sensex)
-		# baj_ltp = getLTP(bajfinance)
-		# mid_ltp = getLTP(midcpnifty)
+		# ── poll watched instruments ──────────────────────────────────────────
+		current = {}
+		for name in watch:
+			cfg  = INSTRUMENTS[name]
+			port = Config.ws_map.get(cfg["ws_key"])
+			assert port is not None, f"No port configured for {name}"
+			current[name] = getLTP(cfg["instrument"], port)
 
-		if len(BANKNIFTY_LTP) >= unhealthy_timer:
-			BANKNIFTY_LTP.pop(0)
-			BANKNIFTY_LTP.append(bn_ltp)
-			while len(set(BANKNIFTY_LTP)) == 1:
-					unhealthy_banknifty +=1
-					print(Clock.tictoc(), "BANKNIFTY WebSocket Unhealthy for ", unhealthy_banknifty, " times today. Rebooting...")
-					# chime.warning()
-					os.system(Config.kill_banknifty_ws)
+		# ── health check each ────────────────────────────────────────────────
+		for name in watch:
+			buf = ltps[name]
+			ltp = current[name]
+			if ltp is None:
+				# server not responding — don't pollute buffer with None
+				print(f"\r{Clock.tictoc()} WARNING: {name} server not responding (getLTP=None)", flush=True)
+				continue
+			if len(buf) >= unhealthy_timer:
+				buf.pop(0)
+				buf.append(ltp)
+				# only trigger if ALL values are identical non-None (frozen feed)
+				if len(set(str(v) for v in buf)) == 1:
+					unhealthy[name] += 1
+					print(Clock.tictoc(), f"{name} WebSocket Unhealthy for {unhealthy[name]} times today. Rebooting...")
+					os.system(INSTRUMENTS[name]["kill"]())
 					time.sleep(5)
-					os.system("osascript -e 'tell application \"iTerm\" to activate' -e 'tell application \"System Events\" to tell process \"iTerm\" to keystroke \"D\" using command down' -e 'tell application \"System Events\" to tell process \"iTerm\" to keystroke \"banknifty_ws\"' -e 'tell application \"System Events\" to tell process \"iTerm\" to key code 52'")
+					_relaunch_ws(name)
 					time.sleep(5)
-					BANKNIFTY_LTP = []
-		else:
-			BANKNIFTY_LTP.append(bn_ltp)
+					buf.clear()
+			else:
+				buf.append(ltp)
 
-		if len(NIFTY_LTP) >= unhealthy_timer:
-			NIFTY_LTP.pop(0)
-			NIFTY_LTP.append(n_ltp)
-			while len(set(NIFTY_LTP)) == 1:
-					unhealthy_nifty +=1
-					print(Clock.tictoc(), "NIFTY WebSocket Unhealthy for ", unhealthy_nifty, " times today. Rebooting...")
-					# chime.warning()
-					os.system(Config.kill_nifty_ws)	
-					time.sleep(5)
-					os.system("osascript -e 'tell application \"iTerm\" to activate' -e 'tell application \"System Events\" to tell process \"iTerm\" to keystroke \"D\" using command down' -e 'tell application \"System Events\" to tell process \"iTerm\" to keystroke \"nifty_ws\"' -e 'tell application \"System Events\" to tell process \"iTerm\" to key code 52'")
-					time.sleep(5)
-					NIFTY_LTP = []
-		else:
-			NIFTY_LTP.append(n_ltp)
+		# ── status line ──────────────────────────────────────────────────────
+		parts = [f"{name}: @{ltps[name][-1]}" for name in watch if ltps[name]]
+		if parts:
+			print(f"{Clock.tictoc()} " + " || ".join(parts), end="\r", flush=True)
 
-		# if len(MIDCPNIFTY_LTP) >= unhealthy_timer:
-		# 	MIDCPNIFTY_LTP.pop(0)
-		# 	MIDCPNIFTY_LTP.append(mid_ltp)
-		# 	while len(set(MIDCPNIFTY_LTP)) == 1:
-		# 			unhealthy_midcpnifty +=1
-		# 			print(Clock.tictoc(), "MIDCPNIFTY WebSocket Unhealthy for ", unhealthy_midcpnifty, " times today. Rebooting...")
-		# 			# chime.warning()
-		# 			os.system(Config.kill_midcpnifty_ws)	
-		# 			time.sleep(5)
-		# 			os.system("osascript -e 'tell application \"iTerm\" to activate' -e 'tell application \"System Events\" to tell process \"iTerm\" to keystroke \"D\" using command down' -e 'tell application \"System Events\" to tell process \"iTerm\" to keystroke \"midcpnifty_ws\"' -e 'tell application \"System Events\" to tell process \"iTerm\" to key code 52'")
-		# 			time.sleep(5)
-		# 			MIDCPNIFTY_LTP = []
-		# else:
-		# 	MIDCPNIFTY_LTP.append(mid_ltp)
-		
-		if len(FINNIFTY_LTP) >= unhealthy_timer:
-			FINNIFTY_LTP.pop(0)
-			FINNIFTY_LTP.append(fin_ltp)
-			while len(set(FINNIFTY_LTP)) == 1:
-					unhealthy_finnifty +=1
-					print(Clock.tictoc(), "FINNIFTY WebSocket Unhealthy for ", unhealthy_finnifty, " times today. Rebooting...")
-					# chime.warning()
-					os.system(Config.kill_finnifty_ws)	
-					time.sleep(5)
-					os.system("osascript -e 'tell application \"iTerm\" to activate' -e 'tell application \"System Events\" to tell process \"iTerm\" to keystroke \"D\" using command down' -e 'tell application \"System Events\" to tell process \"iTerm\" to keystroke \"finnifty_ws\"' -e 'tell application \"System Events\" to tell process \"iTerm\" to key code 52'")
-					time.sleep(5)
-					FINNIFTY_LTP = []
-		else:
-			FINNIFTY_LTP.append(fin_ltp)
-
-		if len(SENSEX_LTP) >= unhealthy_timer:
-			SENSEX_LTP.pop(0)
-			SENSEX_LTP.append(sen_ltp)
-			while len(set(SENSEX_LTP)) == 1:
-					unhealthy_sensex +=1
-					print(Clock.tictoc(), "SENSEX WebSocket Unhealthy for ", unhealthy_sensex, " times today. Rebooting...")
-					os.system(Config.kill_sensex_ws)
-					time.sleep(5)
-					os.system("osascript -e 'tell application \"iTerm\" to activate' -e 'tell application \"System Events\" to tell process \"iTerm\" to keystroke \"D\" using command down' -e 'tell application \"System Events\" to tell process \"iTerm\" to keystroke \"sensex_ws\"' -e 'tell application \"System Events\" to tell process \"iTerm\" to key code 52'")
-					time.sleep(5)
-					SENSEX_LTP = []
-		else:
-			SENSEX_LTP.append(sen_ltp)
-
-		# if len(BAJFINANCE_LTP) >= unhealthy_timer:
-		# 	BAJFINANCE_LTP.pop(0)
-		# 	BAJFINANCE_LTP.append(baj_ltp)
-		# 	while len(set(BAJFINANCE_LTP)) == 1:
-		# 			unhealthy_bajfinance +=1
-		# 			print(Clock.tictoc(), "BAJFINANCE WebSocket Unhealthy for ", unhealthy_bajfinance, " times today. Rebooting...")
-		# 			# chime.warning()
-		# 			os.system(Config.kill_bajfinance_ws)	
-		# 			time.sleep(5)
-		# 			os.system("osascript -e 'tell application \"iTerm\" to activate' -e 'tell application \"System Events\" to tell process \"iTerm\" to keystroke \"D\" using command down' -e 'tell application \"System Events\" to tell process \"iTerm\" to keystroke \"bajfinance_ws\"' -e 'tell application \"System Events\" to tell process \"iTerm\" to key code 52'")
-		# 			time.sleep(5)
-		# 			BAJFINANCE_LTP = []
-		# else:
-		# 	BAJFINANCE_LTP.append(baj_ltp)
-
-		# if len(BANKNIFTY_LTP) > 0 and len(NIFTY_LTP) > 0 and len(MIDCPNIFTY_LTP) > 0 and len(FINNIFTY_LTP) > 0 and len(BAJFINANCE_LTP) > 0:
-		# 	print(f"{Clock.tictoc()} Nifty: @{NIFTY_LTP[-1]} || MIDCPNifty: @{MIDCPNIFTY_LTP[-1]} || BankNifty: @{BANKNIFTY_LTP[-1]} || FinNifty: @{FINNIFTY_LTP[-1]} || BajFinance: @{BAJFINANCE_LTP[-1]} ", end="\r", flush=True)
-		# if len(BANKNIFTY_LTP) > 0 and len(NIFTY_LTP) > 0 and len(FINNIFTY_LTP) > 0 and len(BAJFINANCE_LTP) > 0:
-		# 	print(f"{Clock.tictoc()} Nifty: @{NIFTY_LTP[-1]} || BankNifty: @{BANKNIFTY_LTP[-1]} || FinNifty: @{FINNIFTY_LTP[-1]} || BajFinance: @{BAJFINANCE_LTP[-1]} ", end="\r", flush=True)
-		if len(BANKNIFTY_LTP) > 0 and len(NIFTY_LTP) > 0 and len(FINNIFTY_LTP) > 0 and len(SENSEX_LTP) > 0:
-			print(f"{Clock.tictoc()} Nifty: @{NIFTY_LTP[-1]} || BankNifty: @{BANKNIFTY_LTP[-1]} || FinNifty: @{FINNIFTY_LTP[-1]} || Sensex: @{SENSEX_LTP[-1]}", end="\r", flush=True)
 		time.sleep(2)
-	os.system(Config.kill_banknifty_ws)
-	time.sleep(5)
-	os.system(Config.kill_nifty_ws)
-	time.sleep(5)
-	os.system(Config.kill_midcpnifty_ws)
-	time.sleep(5)
-	os.system(Config.kill_finnifty_ws)
-	time.sleep(5)
-	os.system(Config.kill_bajfinance_ws)
-	time.sleep(5)
-	os.system(Config.kill_sensex_ws)
-	time.sleep(5)
+
+	# ── EOD: kill watched websockets ─────────────────────────────────────────
+	for name in watch:
+		os.system(INSTRUMENTS[name]["kill"]())
+		time.sleep(5)
 	exit()
 
-Clock.wait_until(Config.ws_start_hour,Config.ws_start_min+1,Config.ws_start_sec)
-monitorHealth()
+
+def main():
+	valid = set(INSTRUMENTS.keys())
+	default = ["BANKNIFTY", "NIFTY", "FINNIFTY", "SENSEX"]
+
+	parser = argparse.ArgumentParser(description="WebSocket health monitor")
+	parser.add_argument(
+		"--watch",
+		nargs="+",
+		metavar="INSTRUMENT",
+		default=default,
+		help=f"Instruments to monitor. Valid: {', '.join(sorted(valid))}. Default: {' '.join(default)}",
+	)
+	args = parser.parse_args()
+
+	# validate manually so we get a clear error without argparse choices quirks
+	unknown = [i for i in args.watch if i not in valid]
+	if unknown:
+		parser.error(f"Unknown instrument(s): {', '.join(unknown)}. Valid: {', '.join(sorted(valid))}")
+
+	watch = set(args.watch)
+	print(f"Monitoring: {', '.join(sorted(watch))}")
+
+	Clock.wait_until(Config.ws_start_hour, Config.ws_start_min + 1, Config.ws_start_sec)
+	monitorHealth(watch)
+
+
+if __name__ == "__main__":
+	main()

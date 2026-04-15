@@ -1,0 +1,270 @@
+# ── Algo Trading ────────────────────────────────────────────────────────────────
+ALGO=/Users/ssr/Documents/algo/Fyers
+ALGO_VENV=/Users/ssr/Documents/algo/venv
+ALGO_PYTHON=$ALGO_VENV/bin/python
+ALGO_PIP=$ALGO_VENV/bin/pip
+
+# Anthropic API key — used by LLM signal parser (utils/llm_signal_parser.py)
+export ANTHROPIC_API_KEY="<your-anthropic-api-key>"  # set in shell before sourcing
+
+# Activate the algo venv in the current shell
+alias algo-activate="source $ALGO_VENV/bin/activate"
+
+# Login
+alias ramflogin="$ALGO_PYTHON $ALGO/Login_RAM.py"
+alias saiflogin="$ALGO_PYTHON $ALGO/Login_SAI.py"
+alias fyers="$ALGO_PYTHON $ALGO/Login_Fyers.py"
+alias upstox="$ALGO_PYTHON $ALGO/upstox.py"
+
+# Bots — auto-login if today's config YAML is missing
+_algo_config_today() { echo "$ALGO/Trades/$(date +%Y-%m-%d)/config_$(date +%Y-%m-%d).yml"; }
+telegram_bot() {
+  if [[ ! -f "$(_algo_config_today)" ]]; then
+    echo "No config for today — running fyers login first..."
+    $ALGO_PYTHON $ALGO/Login_Fyers.py || return 1
+  fi
+  $ALGO_PYTHON $ALGO/telegram_BOT.py; sleep 5; exit
+}
+TELEGRAM_BOT() { telegram_bot "$@"; }
+alias sot_bot="$ALGO_PYTHON $ALGO/SOT_BOTv8.py"
+alias sot_botv7="$ALGO_PYTHON $ALGO/SOT_BOTv7.py"
+alias dart="$ALGO_PYTHON $ALGO/dart.py; sleep 5; exit"
+
+# WebSocket servers — foreground (opens in current terminal, blocks)
+alias banknifty_ws="$ALGO_PYTHON $ALGO/ws_fyers_BANKNIFTY_v3.py; sleep 5; exit"
+alias nifty_ws="$ALGO_PYTHON $ALGO/ws_fyers_NIFTY_v3.py; sleep 5; exit"
+alias midcpnifty_ws="$ALGO_PYTHON $ALGO/ws_fyers_MIDCPNIFTY_v3.py; sleep 5; exit"
+alias finnifty_ws="$ALGO_PYTHON $ALGO/ws_fyers_FINNIFTY_v3.py; sleep 5; exit"
+alias bajfinance_ws="$ALGO_PYTHON $ALGO/ws_fyers_BAJFINANCE_v3.py; sleep 5; exit"
+alias sensex_ws="$ALGO_PYTHON $ALGO/ws_fyers_SENSEX_v3.py; sleep 5; exit"
+function ws_healthcheck { $ALGO_PYTHON $ALGO/ws_healthcheck.py "$@"; sleep 5; exit; }
+function WS_HEALTHCHECK { ws_healthcheck "$@"; }
+
+# WebSocket servers — background (detached, stdout+stderr → Trades/YYYY-MM-DD/<name>.out)
+_ws_bg() {
+  local script=$1 name=$2
+  local logdir="$ALGO/Trades/$(date +%Y-%m-%d)"
+  mkdir -p "$logdir"
+  nohup $ALGO_PYTHON "$ALGO/$script" >> "$logdir/${name}.out" 2>&1 &
+  local pid=$!
+  echo $pid > "$logdir/${name}.pid"
+  echo "$(date +%H:%M:%S) $name started in background  PID=$pid  log=$logdir/${name}.out"
+}
+function banknifty_ws_bg  { _ws_bg ws_fyers_BANKNIFTY_v3.py  banknifty_ws;  }
+function nifty_ws_bg      { _ws_bg ws_fyers_NIFTY_v3.py      nifty_ws;      }
+function midcpnifty_ws_bg { _ws_bg ws_fyers_MIDCPNIFTY_v3.py midcpnifty_ws; }
+function finnifty_ws_bg   { _ws_bg ws_fyers_FINNIFTY_v3.py   finnifty_ws;   }
+function bajfinance_ws_bg { _ws_bg ws_fyers_BAJFINANCE_v3.py bajfinance_ws; }
+function sensex_ws_bg     { _ws_bg ws_fyers_SENSEX_v3.py     sensex_ws;     }
+
+# launch_ws [INSTRUMENT ...] — wait until 09:15, start selected WS in bg, then monitor
+# Examples:
+#   launch_ws                              → start + monitor all (BANKNIFTY NIFTY SENSEX FINNIFTY MIDCPNIFTY)
+#   launch_ws NIFTY BANKNIFTY SENSEX       → start + monitor only those three
+launch_ws() {
+  local -a instruments
+  if [ $# -eq 0 ]; then
+    instruments=(BANKNIFTY NIFTY SENSEX FINNIFTY MIDCPNIFTY)
+  else
+    instruments=("$@")
+  fi
+
+  while (( $(date +"%Y%m%d%H%M%S") < $(date +"%Y%m%d")$_LAUNCH_TIME )); do
+    echo -ne "$(date)\r"
+  done
+  echo "\n$(date) : Starting WebSocket servers: ${instruments[*]}"
+
+  for i in "${instruments[@]}"; do
+    case $i in
+      BANKNIFTY)  banknifty_ws_bg  ;;
+      NIFTY)      nifty_ws_bg      ;;
+      SENSEX)     sensex_ws_bg     ;;
+      FINNIFTY)   finnifty_ws_bg   ;;
+      MIDCPNIFTY) midcpnifty_ws_bg ;;
+      BAJFINANCE) bajfinance_ws_bg ;;
+      *) echo "Unknown instrument: $i (skipped)" ;;
+    esac
+  done
+
+  ws_healthcheck --watch "${instruments[@]}"
+}
+function LAUNCH_WS { launch_ws "$@"; }
+
+# Market data / analysis
+alias data="$ALGO_PYTHON $ALGO/niftytrader.py"
+alias oc="$ALGO_PYTHON $ALGO/optionchain.py"
+
+# Combo: login + telegram bot
+alias ssr_start="fyers; upstox; telegram_bot"
+
+# ── Uppercase mirrors (caps lock friendly) ──────────────────────────────────────
+alias RAMFLOGIN='ramflogin'
+alias SAIFLOGIN='saiflogin'
+alias FYERS='fyers'
+alias UPSTOX='upstox'
+alias SOT_BOT='sot_bot'
+alias SOT_BOTV7='sot_botv7'
+alias DART='dart'
+alias BANKNIFTY_WS='banknifty_ws'
+alias NIFTY_WS='nifty_ws'
+alias MIDCPNIFTY_WS='midcpnifty_ws'
+alias FINNIFTY_WS='finnifty_ws'
+alias BAJFINANCE_WS='bajfinance_ws'
+alias SENSEX_WS='sensex_ws'
+alias BANKNIFTY_WS_BG='banknifty_ws_bg'
+alias NIFTY_WS_BG='nifty_ws_bg'
+alias MIDCPNIFTY_WS_BG='midcpnifty_ws_bg'
+alias FINNIFTY_WS_BG='finnifty_ws_bg'
+alias BAJFINANCE_WS_BG='bajfinance_ws_bg'
+alias SENSEX_WS_BG='sensex_ws_bg'
+
+alias DATA='data'
+alias OC='oc'
+alias SSR_START='ssr_start'
+
+# ── LTP quick-check (curl WebSocket servers) ────────────────────────────────────
+bn() {
+  if [ -z "$1" ]; then
+    curl -s "http://localhost:4001/ltp?instrument=NSE:NIFTYBANK-INDEX"
+  else
+    case $1 in
+      NSE:*) curl -s "http://localhost:4001/ltp?instrument=$1" ;;
+      *)     curl -s "http://localhost:4001/ltp?instrument=NSE:$1" ;;
+    esac
+  fi
+}
+BN() { bn "$@"; }
+
+n50() {
+  if [ -z "$1" ]; then
+    curl -s "http://localhost:4002/ltp?instrument=NSE:NIFTY50-INDEX"
+  else
+    case $1 in
+      NSE:*) curl -s "http://localhost:4002/ltp?instrument=$1" ;;
+      *)     curl -s "http://localhost:4002/ltp?instrument=NSE:$1" ;;
+    esac
+  fi
+}
+N50() { n50 "$@"; }
+
+midcp() {
+  if [ -z "$1" ]; then
+    curl -s "http://localhost:4003/ltp?instrument=NSE:MIDCPNIFTY-INDEX"
+  else
+    case $1 in
+      NSE:*) curl -s "http://localhost:4003/ltp?instrument=$1" ;;
+      *)     curl -s "http://localhost:4003/ltp?instrument=NSE:$1" ;;
+    esac
+  fi
+}
+MIDCP() { midcp "$@"; }
+
+fin() {
+  if [ -z "$1" ]; then
+    curl -s "http://localhost:4003/ltp?instrument=NSE:FINNIFTY-INDEX"
+  else
+    case $1 in
+      NSE:*) curl -s "http://localhost:4003/ltp?instrument=$1" ;;
+      *)     curl -s "http://localhost:4003/ltp?instrument=NSE:$1" ;;
+    esac
+  fi
+}
+FIN() { fin "$@"; }
+
+baj() {
+  if [ -z "$1" ]; then
+    curl -s "http://localhost:4004/ltp?instrument=NSE:BAJFINANCE-EQ"
+  else
+    case $1 in
+      NSE:*) curl -s "http://localhost:4004/ltp?instrument=$1" ;;
+      *)     curl -s "http://localhost:4004/ltp?instrument=NSE:$1" ;;
+    esac
+  fi
+}
+BAJ() { baj "$@"; }
+
+sen() {
+  if [ -z "$1" ]; then
+    curl -s "http://localhost:4006/ltp?instrument=BSE:SENSEX-INDEX"
+  else
+    case $1 in
+      BSE:*) curl -s "http://localhost:4006/ltp?instrument=$1" ;;
+      *)     curl -s "http://localhost:4006/ltp?instrument=BSE:$1" ;;
+    esac
+  fi
+}
+SEN() { sen "$@"; }
+
+# ── Timed WebSocket launchers (waits until 09:15:00 before starting) ─────────────
+_LAUNCH_TIME=091500
+
+launch_banknifty_ws() {
+  while (( $(date +"%Y%m%d%H%M%S") < $(date +"%Y%m%d")$_LAUNCH_TIME )); do echo -ne "$(date)\r"; done
+  echo "$(date) : Launching BankNifty WebSocket..."
+  banknifty_ws
+}
+LAUNCH_BANKNIFTY_WS() { launch_banknifty_ws "$@"; }
+
+launch_nifty_ws() {
+  while (( $(date +"%Y%m%d%H%M%S") < $(date +"%Y%m%d")$_LAUNCH_TIME )); do echo -ne "$(date)\r"; done
+  echo "$(date) : Launching Nifty WebSocket..."
+  nifty_ws
+}
+LAUNCH_NIFTY_WS() { launch_nifty_ws "$@"; }
+
+launch_midcpnifty_ws() {
+  while (( $(date +"%Y%m%d%H%M%S") < $(date +"%Y%m%d")$_LAUNCH_TIME )); do echo -ne "$(date)\r"; done
+  echo "$(date) : Launching MidcpNifty WebSocket..."
+  midcpnifty_ws
+}
+LAUNCH_MIDCPNIFTY_WS() { launch_midcpnifty_ws "$@"; }
+
+launch_finnifty_ws() {
+  while (( $(date +"%Y%m%d%H%M%S") < $(date +"%Y%m%d")$_LAUNCH_TIME )); do echo -ne "$(date)\r"; done
+  echo "$(date) : Launching FinNifty WebSocket..."
+  finnifty_ws
+}
+LAUNCH_FINNIFTY_WS() { launch_finnifty_ws "$@"; }
+
+launch_bajfinance_ws() {
+  while (( $(date +"%Y%m%d%H%M%S") < $(date +"%Y%m%d")$_LAUNCH_TIME )); do echo -ne "$(date)\r"; done
+  echo "$(date) : Launching BajFinance WebSocket..."
+  bajfinance_ws
+}
+LAUNCH_BAJFINANCE_WS() { launch_bajfinance_ws "$@"; }
+
+launch_sensex_ws() {
+  while (( $(date +"%Y%m%d%H%M%S") < $(date +"%Y%m%d")$_LAUNCH_TIME )); do echo -ne "$(date)\r"; done
+  echo "$(date) : Launching Sensex WebSocket..."
+  sensex_ws
+}
+LAUNCH_SENSEX_WS() { launch_sensex_ws "$@"; }
+
+launch_ws_healthcheck() {
+  while (( $(date +"%Y%m%d%H%M%S") < $(date +"%Y%m%d")$_LAUNCH_TIME )); do echo -ne "$(date)\r"; done
+  echo "$(date) : Launching WebSocket Health Checker..."
+  ws_healthcheck "$@"
+}
+LAUNCH_WS_HEALTHCHECK() { launch_ws_healthcheck "$@"; }
+
+launch_telegram_bot() {
+  while (( $(date +"%Y%m%d%H%M%S") < $(date +"%Y%m%d")$_LAUNCH_TIME )); do echo -ne "$(date)\r"; done
+  echo "$(date) : Launching Telegram Bot..."
+  telegram_bot
+}
+LAUNCH_TELEGRAM_BOT() { launch_telegram_bot "$@"; }
+
+# launch_ws replaces launch_ws_all_bg — see above
+
+# ── iTerm helpers ───────────────────────────────────────────────────────────────
+run_in_iterm() {
+  local escaped_cmd
+  escaped_cmd=$(printf %q "$1")
+  osascript \
+    -e 'tell application "iTerm" to activate' \
+    -e 'tell application "System Events" to tell process "iTerm" to keystroke "D" using command down' \
+    -e 'delay 3' \
+    -e "tell application \"System Events\" to tell process \"iTerm\" to keystroke \"${escaped_cmd}\"" \
+    -e 'tell application "System Events" to tell process "iTerm" to key code 52'
+}
+RUN_IN_ITERM() { run_in_iterm "$@"; }

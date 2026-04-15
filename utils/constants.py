@@ -74,7 +74,7 @@ class ExpiryDateExtractor:
         self.expiry_info = {}
 
     def extract_date(self, text):
-        pattern = r'\d{2} \w{3} \d{2}'  # Pattern to match 'YY Mon DD'
+        pattern = r'\d{2} \w{3} \d{2}'  # Pattern to match 'DD Mon YY' (e.g. '28 APR 26')
         match = re.search(pattern, text)
         return match.group(0) if match else None
 
@@ -86,11 +86,13 @@ class ExpiryDateExtractor:
 
             if not temp_df.empty:
                 date_components = temp_df['extracted_date'].str.split(' ', expand=True).iloc[0]
-                original_date = datetime.strptime(date_components[2] + ' ' + date_components[1] + ' 20' + date_components[0], '%d %b %Y')
+                # CSV date format is DD Mon YY (e.g. "28 APR 26")
+                # date_components[0]=day, [1]=month, [2]=year
+                original_date = datetime.strptime(date_components[0] + ' ' + date_components[1] + ' 20' + date_components[2], '%d %b %Y')
                 new_date = original_date + timedelta(days=7)
                 month_changed = original_date.month != new_date.month
                 if smart_extractor and fyers:
-                    expiry_day = '' if month_changed else date_components[2]
+                    expiry_day = '' if month_changed else date_components[0]
                     expiry_month = date_components[1]
 
                     if symbol in index_symbols and not month_changed:
@@ -99,18 +101,18 @@ class ExpiryDateExtractor:
                     self.expiry_info[symbol.lower()] = {
                         'expiry_day': expiry_day,
                         'expiry_month': expiry_month.upper(),
-                        'expiry_year': date_components[0]
+                        'expiry_year': date_components[2]
                     }
                 else:
                     date_components = temp_df['extracted_date'].str.split(' ', expand=True).iloc[0]
-                    expiry_day = date_components[2]
+                    expiry_day = date_components[0]
                     expiry_month = date_components[1]
                     if symbol in index_symbols:
                         expiry_month = self.month_mapping.get(expiry_month, expiry_month) if fyers else self.upstox_month_mapping.get(expiry_month, expiry_month)
 
                     if symbol in stock_option_symbols and not fyers:
                         expiry_month = self.upstox_month_mapping.get(expiry_month, expiry_month)
-                        
+
                     expiry_day = '' if symbol in stock_option_symbols and fyers else expiry_day
                     # if symbol in stock_option_symbols and fyers:
                     #     expiry_day = ''
@@ -118,7 +120,7 @@ class ExpiryDateExtractor:
                     self.expiry_info[symbol.lower()] = {
                         'expiry_day': expiry_day,
                         'expiry_month': expiry_month.upper(),
-                        'expiry_year': date_components[0]
+                        'expiry_year': date_components[2]
                     }
         return self.expiry_info
 
