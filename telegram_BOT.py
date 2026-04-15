@@ -489,12 +489,12 @@ def verify_postion_data(position_data: Position):
     return position_data
 
 def is_duplicate_cmd(cmd):
+    for cmd_dict in sot_cmds:
+        if cmd in cmd_dict.values():
+            created_time = cmd_dict["created_time"]
+            time_difference = int(time.time()) - int(created_time)
+            return True if time_difference <= 120 else False
     return False
-    # for cmd_dict in sot_cmds:
-    #     if cmd in cmd_dict.values():
-    #         created_time = cmd_dict["created_time"]
-    #         time_difference = int(time.time()) - int(created_time)
-    #         return True if time_difference <= 120 else False
 
 def send_build_summary(emergency=False):
     message_content = "Ummm, NO Signals YET!"
