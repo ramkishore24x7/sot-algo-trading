@@ -106,7 +106,11 @@ launch_ws() {
     esac
   done
 
-  ws_healthcheck --watch "${instruments[@]}"
+  # Call Python directly — avoids zsh dropping args when a function with 'exit' is
+  # called from inside another function
+  $ALGO_PYTHON "$ALGO/ws_healthcheck.py" --watch "${instruments[@]}"
+  sleep 5
+  exit
 }
 function LAUNCH_WS { launch_ws "$@"; }
 
