@@ -254,7 +254,7 @@ def grep_signal(message):
 
     # without_buy = r"(Bank.*|Nif.*|Baj.*|Fin.*|Nau.*)\s"
     # without_buy = r"(Bank[^\n]*|Nif[^\n]*|Baj[^\n]*|Fin.*|Nau[^\n]*)"
-    without_buy = r"^(.*?(Bank|Nif|Baj|Fin|Nau|Mid).*)"
+    without_buy = r"^(.*?(Bank|Nif|Baj|Fin|Nau|Mid|Sen).*)"
     match_without_buy = re.search(without_buy, message, flags=re.IGNORECASE)
 
     if match:
@@ -1662,9 +1662,9 @@ async def analyse_event(event):
                 await handle_llm_intent(llm_signal, event_id, actual_message,
                                         source_chat_id=event.chat_id,
                                         reply_to_msg_id=reply_to_msg_id)
-                # For clear NEW_SIGNAL with high confidence, let LLM handle it
-                # and skip the regex path to avoid double-triggering
-                if llm_signal.intent == "NEW_SIGNAL" and llm_signal.confidence >= 0.85 and not llm_signal.sl_deferred:
+                # LLM fired a job — always skip regex path for NEW_SIGNAL to
+                # avoid double-trigger or spurious "Missing Signal" messages
+                if llm_signal.intent == "NEW_SIGNAL":
                     return
 
         # Skip raw build/log output sent by SOT_BOTv8.py to this channel
