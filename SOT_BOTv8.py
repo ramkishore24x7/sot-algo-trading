@@ -856,7 +856,7 @@ def check_entry(option):
         else:
             while not entered_trade and not isBreakoutStrategy and not onCrossingAbove and Clock.is_time_less_than(bot_exit_hour,bot_exit_minute):
                 cmp = ensureGetLTP(option)
-                if second_entry_price <= int(cmp) < entry_price+1:
+                if second_entry_price is not None and second_entry_price <= int(cmp) < entry_price+1:
                     takeEntry(option, cmp)
                 elif cmp < static_stoploss:
                     asyncio.run(send_message(f"🚨 Looks {instrument_name} Websocket hung while awaiting entry at {entry_price}, CMP is {cmp} now below stoploss. Aborting the Trade.\n\n{json.dumps(position)}",emergency=True))
