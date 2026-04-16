@@ -781,10 +781,10 @@ class ScreenshotEdgeCaseTests(unittest.TestCase):
         self.assertEqual(sig.intent, "UPDATE_SL")
         self.assertEqual(sig.sl, 190)
 
-    def test_no_sl_line_means_sl_deferred(self):
+    def test_breakout_no_sl_uses_default_15pt(self):
         """
-        'Nifty 22600 pe above 208' with no SL line → sl_deferred=True.
-        Mentor will give SL separately.
+        BREAKOUT signal with no SL → default SL = entry - 15, fires immediately.
+        Convention: breakout entries always use 15-pt implicit SL.
         """
         parser = _make_parser(_new_signal_json(
             instrument="NIFTY", strike="22600", ce_pe="PE",
@@ -793,9 +793,24 @@ class ScreenshotEdgeCaseTests(unittest.TestCase):
             sl=None, sl_deferred=True,
         ))
         sig = parser.parse("Nifty 22600 pe above 208\nTarget 218/228/240/255+", msg_id=32)
-        self.assertTrue(sig.sl_deferred, "Signal with no SL line must have sl_deferred=True")
+        self.assertFalse(sig.sl_deferred, "BREAKOUT with no SL should resolve to default, not defer")
+        self.assertEqual(sig.sl, 193, "Default SL = entry(208) - 15 = 193")
+        self.assertTrue(sig.is_actionable(), "BREAKOUT with default SL must be actionable")
+
+    def test_range_no_sl_still_deferred(self):
+        """
+        RANGE signal with no SL → still deferred. Only BREAKOUT gets the default.
+        """
+        parser = _make_parser(_new_signal_json(
+            instrument="NIFTY", strike="22600", ce_pe="PE",
+            strategy="RANGE", entry_low=190, entry_high=195,
+            targets=[210, 225, 240],
+            sl=None, sl_deferred=True,
+        ))
+        sig = parser.parse("Nifty 22600 pe near 190-195\nTarget 210/225/240+\nSl I will update", msg_id=33)
+        self.assertTrue(sig.sl_deferred, "RANGE signal with no SL must still defer")
         self.assertIsNone(sig.sl)
-        self.assertFalse(sig.is_actionable(), "sl_deferred signal must not fire SOT_BOT")
+        self.assertFalse(sig.is_actionable(), "sl_deferred RANGE must not fire SOT_BOT")
 
     def test_track_both_levels_is_noise_prefilter(self):
         """'Track both levels' is a commentary message — caught by pre-filter."""

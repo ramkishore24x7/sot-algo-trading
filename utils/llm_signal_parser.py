@@ -317,10 +317,11 @@ Older/uppercase format (same logic, just all caps and BUY prefix):
 
 ## Common follow-up patterns and their intents
 - "Re-enter", "re-enter same", "add more near X" → REENTER
+- "From this zone market gave good move", "we will take small risk", "entering again here", "will try again" (mentor hinting at re-entry after previous trade closed) → REENTER
 - "Sl updated to 210", "sl now 195", "sl 185" as standalone → UPDATE_SL
 - "Sl at cost 165", "keep sl at cost 590", "sl at cost and hold" as standalone (mid-trade) → UPDATE_SL with sl_at_cost=true, sl=<the number if present>
 - "Ignore previous", "cancel", "don't take", "avoid this" → CANCEL
-- "Book X lots", "book 50%", "partial book here" → PARTIAL_EXIT
+- "Book X lots", "book X lot", "book X lot total", "book 50%", "partial book here" → PARTIAL_EXIT (any message with "book" + a number of lots/percentage)
 - "Remaining lot exit at 190", "exit at 190", "exit remaining at X" → UPDATE_SL with sl=X (mentor is setting a new exit/SL level, not asking to exit now)
 - "Exit", "close all", "square off" (without a specific price level) → FULL_EXIT
 - "395🚀🚀", "target done", "target was also done" → NOISE
@@ -483,6 +484,14 @@ class LLMSignalParser:
             signal.sl = signal.entry_low - 15
             signal.sl_deferred = False
             logger.info(f"[LLM] BREAKOUT with no SL — applying default SL = entry({signal.entry_low}) - 15 = {signal.sl}")
+
+        # BREAKOUT addon messages rarely repeat targets — inherit from the active range trade
+        if (signal.intent == "NEW_SIGNAL" and signal.strategy == "BREAKOUT"
+                and not signal.targets and self.context.active_signal):
+            ctx_targets = self.context.active_signal.get("targets", [])
+            if ctx_targets:
+                signal.targets = list(ctx_targets)
+                logger.info(f"[LLM] BREAKOUT with no targets — inheriting from active signal: {ctx_targets}")
 
         logger.info(f"[LLM] msg={msg_id} → {signal.summary()}")
         return signal
