@@ -119,7 +119,7 @@ play_safe = True if target1 - entry_price > 20 else False
 precise_trailing = True
 pnl_sent = False
 
-if re_entry: #avoid deep loss and play safe.
+if onCrossingAbove: #avoid deep loss and play safe on breakout entries.
     stop_loss = entry_price - 15
 
 stock_option_input = instrument+strike+PE_CE

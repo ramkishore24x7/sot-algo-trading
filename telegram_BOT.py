@@ -1625,6 +1625,10 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None, 
             emergency=True,
             event_id=event_id, source_chat_id=sc
         )
+        if intent == "FULL_EXIT":
+            squareOff_all_postions()
+            llm_parser.signal_closed()
+            logger.info("[LLM] FULL_EXIT — squared off all positions and cleared active signal.")
         _eod_exits += 1
 
     # ── NOISE ────────────────────────────────────────────────────────────────
