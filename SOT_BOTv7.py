@@ -168,7 +168,7 @@ assert expiry is not None, f"No Expiry Configured for '{instrument_name}'"
 port_number = Config.ws_map.get(instrument_name, None)
 assert port_number is not None, f"No Port Nunber Configured for '{instrument_name}'"
 
-stock_option = exchangeSymbol + instrument_name + expiry["year"] + expiry["month"] + expiry["day"] if instrument_name in Config.index_symbols else exchangeSymbol + instrument_name + expiry["year"] + expiry["month"]
+stock_option = exchangeSymbol + instrument_name + expiry["year"] + expiry["month"] + expiry["day"] if instrument_name in Config.index_symbols + Config.bse_index_symbols else exchangeSymbol + instrument_name + expiry["year"] + expiry["month"]
 if stock_option_input.upper().endswith("PE"):
     stock_option = stock_option + re.findall(r"\d+", stock_option_input)[0] + "PE"
 elif stock_option_input.upper().endswith("CE"):

@@ -478,6 +478,12 @@ class LLMSignalParser:
             raw_message=text,
         )
 
+        # BREAKOUT entries never carry an explicit SL — convention is entry - 15
+        if signal.sl_deferred and signal.strategy == "BREAKOUT" and signal.entry_low is not None:
+            signal.sl = signal.entry_low - 15
+            signal.sl_deferred = False
+            logger.info(f"[LLM] BREAKOUT with no SL — applying default SL = entry({signal.entry_low}) - 15 = {signal.sl}")
+
         logger.info(f"[LLM] msg={msg_id} → {signal.summary()}")
         return signal
 

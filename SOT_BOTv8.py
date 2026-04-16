@@ -171,7 +171,7 @@ elif stock_option_input.upper().startswith("SEN"):
     instrument_name = "SENSEX"
 else:
     exception_content = f"{Clock.tictoc()} Nifty || MidCPNifty || BankNifty || FinNifty || BajFinance || Sensex ONLY. Received '{stock_option_input}'"
-    asyncio.run(send_message(exception_content,emergency=True))
+    client.loop.run_until_complete(send_message(exception_content,emergency=True))
     raise Exception(exception_content)
 
 exchangeSymbol = Config.exchange_map.get(instrument_name, "NSE:")
@@ -181,7 +181,7 @@ assert expiry is not None, f"No Expiry Configured for '{instrument_name}'"
 port_number = Config.ws_map.get(instrument_name, None)
 assert port_number is not None, f"No Port Nunber Configured for '{instrument_name}'"
 
-stock_option = exchangeSymbol + instrument_name + expiry["year"] + expiry["month"] + expiry["day"] if instrument_name in Config.index_symbols else exchangeSymbol + instrument_name + expiry["year"] + expiry["month"]
+stock_option = exchangeSymbol + instrument_name + expiry["year"] + expiry["month"] + expiry["day"] if instrument_name in Config.index_symbols + Config.bse_index_symbols else exchangeSymbol + instrument_name + expiry["year"] + expiry["month"]
 if stock_option_input.upper().endswith("PE"):
     stock_option = stock_option + re.findall(r"\d+", stock_option_input)[0] + "PE"
 elif stock_option_input.upper().endswith("CE"):
@@ -331,10 +331,10 @@ def send_calculated_pnL():
 
         sorted_pnl = sorted(pnl_sum.items(), key=lambda x: x[1], reverse=True)
         pnl = '\n'.join([f"{account}: {round(pnl)}/-" for account, pnl in sorted_pnl])
-        asyncio.run(send_message(f"\nCurrent Trade PnL:\n{pnl}"))
+        client.loop.run_until_complete(send_message(f"\nCurrent Trade PnL:\n{pnl}"))
         pnl_sent = True
     else:
-        asyncio.run(send_message("No PnL generated so far!"))
+        client.loop.run_until_complete(send_message("No PnL generated so far!"))
 
 def send_order_placement_erros(heading,orders):
     message_content = ""
@@ -344,7 +344,7 @@ def send_order_placement_erros(heading,orders):
     if message_content:
         message_content = f"\n\n🚨 {heading}: 🚨\n\n{message_content}"
         logger.warning(f"{message_content}")
-        asyncio.run(send_message(message_content,emergency=True))
+        client.loop.run_until_complete(send_message(message_content,emergency=True))
 
 def fetchLTP(name):
     ltp = -1
@@ -359,7 +359,7 @@ def fetchLTP(name):
     except Exception as e:
         if entered_trade:
             api_response_formatted = format_flattened_dict_as_string(response,"API Response:")
-            asyncio.run(send_message(f"🆘 CHUCK EVERYTHING AND LOOK INTO THIS!\n\n{api_response_formatted}"))
+            client.loop.run_until_complete(send_message(f"🆘 CHUCK EVERYTHING AND LOOK INTO THIS!\n\n{api_response_formatted}"))
         logger.error(f"{name}: Failed : {e}")
         logger.error(f"Error Trace: {traceback.print_exc()}")
     return ltp,response
@@ -378,16 +378,16 @@ def getLTP(option,spot=False):
             success = True
         except Exception as e:
             if entered_trade and (counter % 3 == 0):
-                asyncio.run(send_message(f"🚨🚨🚨\n\nOpen Postion & {instrument_name} Websocket is acting up, relying on API for every 3 Seconds!",emergency=True))
+                client.loop.run_until_complete(send_message(f"🚨🚨🚨\n\nOpen Postion & {instrument_name} Websocket is acting up, relying on API for every 3 Seconds!",emergency=True))
                 success = True
                 api_mode = True
                 resp, fetchLTP_resp  = fetchLTP(option)
 
             if entered_trade and (counter % 15 == 0):
-                asyncio.run(send_message(f"🆘 \n\nOpen Postion & {instrument_name} Websocket hung up, retried #{counter} times.\n\nReply STOP on this message to gain manual control and EXIT trade when LTP reaches {stop_loss}/-",emergency=True))
+                client.loop.run_until_complete(send_message(f"🆘 \n\nOpen Postion & {instrument_name} Websocket hung up, retried #{counter} times.\n\nReply STOP on this message to gain manual control and EXIT trade when LTP reaches {stop_loss}/-",emergency=True))
                 alert_sent = True
             if entered_trade and (counter == (max_attempts - 30)):
-                asyncio.run(send_message(f"🆘 \n\nLast 30 Seconds to take manual control ain't will auto square off all postions!",emergency=True))
+                client.loop.run_until_complete(send_message(f"🆘 \n\nLast 30 Seconds to take manual control ain't will auto square off all postions!",emergency=True))
                 alert_sent = True
             logger.error(f"Exception @getLTP:{e}")
             logger.error(f"Error Trace: {traceback.print_exc()}")
@@ -400,7 +400,7 @@ def getLTP(option,spot=False):
     elif resp is not None:
         data = resp.json()
         if alert_sent:
-            asyncio.run(send_message(f"👻\n\nHuh, Relax! {instrument_name} Websocket is now restored!",emergency=True))
+            client.loop.run_until_complete(send_message(f"👻\n\nHuh, Relax! {instrument_name} Websocket is now restored!",emergency=True))
         return data
     else:
         message_conent = f"🫢\n\nLooks SOT_BOT couldn't connect to {instrument_name} websocket for LTP, gave up after #{counter} attempts!"
@@ -408,7 +408,7 @@ def getLTP(option,spot=False):
             send_order_placement_erros("SQUARE-OFF POSITION",trade_manager.square_off_position(position,-1))
             message_conent = f"😢 🆘 🆘 🆘\n\nLooks SOT_BOT couldn't connect to {instrument_name} websocket for LTP, gave up after #{counter} attempts! Squared Off {option} via API, Ensure We've Exited the positions on all LIVE Demats!"
         logger.error(message_conent)
-        asyncio.run(send_message(message_conent,emergency=True))
+        client.loop.run_until_complete(send_message(message_conent,emergency=True))
         exit()
 
 def ensureGetLTP(option,spot=None):
@@ -425,12 +425,12 @@ def ensureGetLTP(option,spot=None):
         send_order_placement_erros("SQUARE-OFF POSITION",trade_manager.square_off_position(position,cmp))
         message_conent = f"😢 🆘 🆘 🆘\n\n Fyers {instrument_name} Websockets are down and API , LTP retrieved is -1 for continuous #{max_attempts} attempts! Squared Off {option} via API, Ensure We've Exited the positions on all LIVE Demats!"
         logger.error(message_conent)
-        asyncio.run(send_message(message_conent,emergency=True))
+        client.loop.run_until_complete(send_message(message_conent,emergency=True))
         exit()
     elif cmp == -1 and not isInValidTrade:
         message_conent = f"Phew!\n\n Fyers {instrument_name} Websockets are down, LTP retrieved is -1 for continuous #{max_attempts} attempts! You might want to retry this build, if you see Fyers is back and stable!"
         logger.error(message_conent)
-        asyncio.run(send_message(message_conent,emergency=True))
+        client.loop.run_until_complete(send_message(message_conent,emergency=True))
         exit()
     return cmp
 
@@ -577,7 +577,7 @@ class TradeHandler:
                 f"Late entry: fill {self.current_entry_price}/- > T1 {targets_list[0]}/-. "
                 f"Skipping T1 booking. All lots ride to T2+. SL → {self.stop_loss}/-"
             )
-            asyncio.run(send_message(
+            client.loop.run_until_complete(send_message(
                 f"⚡ Late entry at {self.current_entry_price}/- (above T1={targets_list[0]}). "
                 f"Skipping T1, riding to T2+. SL={self.stop_loss}/-"
             ))
@@ -618,10 +618,9 @@ class TradeHandler:
     # on_price — the heart of the change
     # This is the body of the old `while not traded:` loop, now called
     # by PriceDispatcher instead of blocking and polling.
-    # NOTE: called from dispatcher's background thread. asyncio.run() is
-    # safe here (creates its own loop per call) but is blocking — fine
-    # for a single-trade process. A future multi-trade coordinator should
-    # use a dedicated thread or async queue for Telegram sends.
+    # NOTE: called from dispatcher's background thread.
+    # Uses client.loop.run_until_complete() — same loop Telethon connected on.
+    # asyncio.run() would create a new loop which Telethon rejects at send time.
     # ------------------------------------------------------------------
 
     def on_price(self, cmp: float):
@@ -634,7 +633,7 @@ class TradeHandler:
         print("Live: ", self.option, " : PnL: ", live_pnl, " INR ", next(spinner), end="\r", flush=True)
 
         if not self._message_sent:
-            asyncio.run(send_message(f"{cmp}/- ♐️🍀 LIVE POSITION"))
+            client.loop.run_until_complete(send_message(f"{cmp}/- ♐️🍀 LIVE POSITION"))
             self._message_sent = True
 
         try:
@@ -651,7 +650,7 @@ class TradeHandler:
                 logger.critical(f"stop_loss hit! closed at {self.stop_loss}/-; Highest LTP: {self.ltpHigh}/-")
                 print("Closed: ", self.option)
                 smiley = "🤑" if live_pnl > 0 else "🤐 khata khata hatha vidhi!"
-                asyncio.run(send_message(f"{gain} Points! {smiley} | Peak Gain: {self.peak_gain}"))
+                client.loop.run_until_complete(send_message(f"{gain} Points! {smiley} | Peak Gain: {self.peak_gain}"))
                 reason = "EOD_SQUAREOFF" if not Clock.is_time_less_than(trade_exit_hour, trade_exit_minute) else "SL"
                 if not re_entered and not self._soldAtTarget1 and re_entry:
                     self._finish(exit_price=cmp, reason=reason)
@@ -737,7 +736,7 @@ class TradeHandler:
                     # keep legacy flags in sync for play_safe trail blocks
                     if i == 0: self._soldAtTarget1 = True
                     if i == 1: self._soldAtTarget2 = True
-                    asyncio.run(send_message(f"{smileys} {gain} Points{'!' if is_last else '...'}"))
+                    client.loop.run_until_complete(send_message(f"{smileys} {gain} Points{'!' if is_last else '...'}"))
 
                     if i == 0:
                         # First target hit: SL → cost/break-even (sl_at_cost),
@@ -831,7 +830,7 @@ def check_entry(option):
         if cmp == -1:
             message_conent = f"🙊 Probably an Invalid Strike as CMP is {cmp} or {instrument_name} Websocket has hung up! Run Diagnosis and then RETRY Build: #{buildNumber}"
             logger.error(message_conent)
-            asyncio.run(send_message(message_conent,emergency=True))
+            client.loop.run_until_complete(send_message(message_conent,emergency=True))
             raise Exception(message_conent)
         closestLTP = cmp
         logger.warning(f"{spot} received a spot to be checked for")
@@ -859,7 +858,7 @@ def check_entry(option):
                 if second_entry_price is not None and second_entry_price <= int(cmp) < entry_price+1:
                     takeEntry(option, cmp)
                 elif cmp < static_stoploss:
-                    asyncio.run(send_message(f"🚨 Looks {instrument_name} Websocket hung while awaiting entry at {entry_price}, CMP is {cmp} now below stoploss. Aborting the Trade.\n\n{json.dumps(position)}",emergency=True))
+                    client.loop.run_until_complete(send_message(f"🚨 Looks {instrument_name} Websocket hung while awaiting entry at {entry_price}, CMP is {cmp} now below stoploss. Aborting the Trade.\n\n{pprint.pformat(vars(position))}",emergency=True))
                     exit()
                 else:
                     closestLTP = cmp if cmp < closestLTP else closestLTP
@@ -873,7 +872,7 @@ def check_entry(option):
                     if almost and cmp >= target1:
                         message_content = f"Its likely that we missed the trade by {closest_diff} points. Aborting this call!"
                         logger.warning(message_content)
-                        asyncio.run(send_message(message_content))
+                        client.loop.run_until_complete(send_message(message_content))
                         exit()
 
                     print("Awaiting: ",option,next(spinner), end="\r", flush=True)
@@ -903,11 +902,11 @@ def check_entry(option):
                         takeEntry(option, int(prevCandleClose))
                 elif  prevCandleClose is not None and prevCandleClose >= target1:
                     logger.info(f"Previous Candle Close price was greater than target1, aborting taking a trade. Prev Candle Close: {prevCandleClose}")
-                    asyncio.run(send_message(f"🙊 Previous Candle Close price was greater than target1, aborting taking a trade. Prev Candle Close: {prevCandleClose}",emergency=True))
+                    client.loop.run_until_complete(send_message(f"🙊 Previous Candle Close price was greater than target1, aborting taking a trade. Prev Candle Close: {prevCandleClose}",emergency=True))
                     break
                 elif prevCandleClose is None:
                     logger.warning(f"Option: {option} Previous Candle retrived as None. Aborting Taking a trade.")
-                    asyncio.run(send_message(f"🙊 Previous Candle retrived as None. Aborting Taking a trade!",emergency=True))
+                    client.loop.run_until_complete(send_message(f"🙊 Previous Candle retrived as None. Aborting Taking a trade!",emergency=True))
                     break
                 elif round(int(prevCandleClose)) >= entry_price + almost_breakout_price and not almost:
                     almost_price = int(prevCandleClose)
@@ -915,7 +914,7 @@ def check_entry(option):
                 elif almost and round(int(prevCandleClose)) <= static_stoploss:
                     message_content = f"😎 Ah! Price made the high of {almost_price}/- and hit the stoploss. Aborting this call!"
                     logger.warning(message_content)
-                    asyncio.run(send_message(f"🙈 \n{message_content}",emergency=True))
+                    client.loop.run_until_complete(send_message(f"🙈 \n{message_content}",emergency=True))
                     exit()
                 else:
                     print("Awaiting: ",option,next(spinner), end="\r", flush=True)
@@ -924,11 +923,11 @@ def check_entry(option):
         if not Clock.is_time_less_than(bot_exit_hour,bot_exit_minute):
             message_conent = f"🙈🙉🙊 \nTime Up... BOT Aborted!!"
             logger.warning(f"{message_conent}")
-            asyncio.run(send_message(message_conent))
+            client.loop.run_until_complete(send_message(message_conent))
     except Exception as e:
         message_conent = f"Exception at Check Entry: {e}\n\nTrace:\n {traceback.print_exc()}"
         logger.error(f"Error Trace: {traceback.print_exc()}")
-        asyncio.run(send_message(message_conent,emergency=True))
+        client.loop.run_until_complete(send_message(message_conent,emergency=True))
 
 
 # =============================================================================
@@ -984,11 +983,11 @@ if __name__ == '__main__':
 
     if any([isInValidTrade, cmp_below_entry_price, cmp_below_second_entry_price, cmp_above_target1]):
         if messenger:
-            asyncio.run(send_message(message_content,emergency=True))
+            client.loop.run_until_complete(send_message(message_content,emergency=True))
         logger.error(message_content)
         exit()
 
-    asyncio.run(send_message(message_content))
+    client.loop.run_until_complete(send_message(message_content))
     logger.warning(f"{bot_name} is now activated...")
 
     # Start the dispatcher — one polling loop for this process

@@ -82,6 +82,8 @@ class ExpiryDateExtractor:
         for symbol in index_symbols + stock_option_symbols:
             pattern = r'\b{}\b'.format(symbol)  # Match the exact symbol
             temp_df = self.df[self.df[1].str.contains(pattern, na=False, regex=True)].copy()
+            # Exclude futures rows so iloc[0] always yields the nearest options expiry
+            temp_df = temp_df[~temp_df[1].str.contains(r'\bFUT\b', na=False, regex=True)]
             temp_df['extracted_date'] = temp_df[1].apply(self.extract_date)
 
             if not temp_df.empty:
