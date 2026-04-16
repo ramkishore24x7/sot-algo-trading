@@ -1663,7 +1663,8 @@ async def analyse_event(event):
         event_id = event.message.id
 
         # ── LLM intent routing (signal channels) ──
-        if llm_parser and event.chat_id in (sot_channel, sot_trial_channel, qwerty_channel):
+        _is_signal_channel = llm_parser and event.chat_id in (sot_channel, sot_trial_channel, qwerty_channel)
+        if _is_signal_channel:
             is_edit = hasattr(event, 'message') and getattr(event.message, 'edit_date', None) is not None
             # Capture reply-chain link — if this message is a Telegram reply,
             # reply_to_msg_id is the ID of the parent message (the original signal).
@@ -1673,10 +1674,14 @@ async def analyse_event(event):
                 await handle_llm_intent(llm_signal, event_id, actual_message,
                                         source_chat_id=event.chat_id,
                                         reply_to_msg_id=reply_to_msg_id)
-                # LLM handled this message — skip regex path for any non-NOISE
-                # intent to avoid double-triggers (REENTER gets reclassified to
-                # NEW_SIGNAL inside handle_llm_intent, after this check runs)
+                # LLM handled this message — skip regex path entirely to avoid
+                # double-triggers on exit/re-entry/revised-signal patterns.
                 return
+            # LLM said NOISE for a signal-channel message — skip the actionable
+            # regex blocks (exit, revised_signal, re-entry) which have broad
+            # patterns that misfire on innocent commentary.  Only informational
+            # checks (SJB, HERO, mistake, level-update) are safe to still run.
+            # Fall through to those below after the actionable section.
 
         # Skip raw build/log output sent by SOT_BOTv8.py to this channel
         if _LOG_TS_RE.match(actual_message) or _BUILD_HDR_RE.match(actual_message):
@@ -1705,7 +1710,11 @@ async def analyse_event(event):
         
         relaxed_exit_keywords = ("NEXT TARGET", "EXITED", "SL AT COST", "REM", "REL", "REK", "LOT", "BOOKED", "NEXT")
         # check if the received message is an exit singal
-        if re.search(exit_regex_pattern, message, flags=re.IGNORECASE) and message_replied_for is not None and not any(keyword in message for keyword in relaxed_exit_keywords):
+        # Skip actionable regex blocks for signal-channel messages — LLM owns those.
+        # The _is_signal_channel flag was set above; NOISE fallthrough still reaches here
+        # but the broad patterns (exit, revised_signal, re-entry) must not misfire on
+        # innocent commentary.  Non-signal channels (admin, personal) still use regex.
+        if not _is_signal_channel and re.search(exit_regex_pattern, message, flags=re.IGNORECASE) and message_replied_for is not None and not any(keyword in message for keyword in relaxed_exit_keywords):
             logger.info(f"Received EXIT Signal")
             recent_loss_postion = build_position_data(message_replied_for)
             if recent_loss_postion is not None:
@@ -1717,17 +1726,17 @@ async def analyse_event(event):
                 logger.info(f"Failed to capture Recent loss making postion. message replied for: {message_replied_for}")
                 asyncio.run(send_message(f"🐠 🆘 Early EXIT Signal! 🆘\n\n{message_content}",emergency=True,event_id=event_id))
 
-        elif re.search(exit_regex_pattern, message, flags=re.IGNORECASE) and message_replied_for is None and not any(keyword in message for keyword in relaxed_exit_keywords):
+        elif not _is_signal_channel and re.search(exit_regex_pattern, message, flags=re.IGNORECASE) and message_replied_for is None and not any(keyword in message for keyword in relaxed_exit_keywords):
             asyncio.run(send_message(f"🐠 🆘 Early EXIT Signal as orphan message! 🆘\n\nRequesting early exit of Position, please take a look!\n\nSOT_MESSAGE:\n\n{message}",emergency=True,event_id=event_id))
 
-        elif re.search(dicey_exit_regex_pattern, message, flags=re.IGNORECASE) and not any(keyword in message for keyword in relaxed_exit_keywords):
+        elif not _is_signal_channel and re.search(dicey_exit_regex_pattern, message, flags=re.IGNORECASE) and not any(keyword in message for keyword in relaxed_exit_keywords):
             message_content = f"🐠 🆘 Fishy EXIT Signal! 🆘 \n\nExit Position as needed or stop the Build if it didn't get triggered.!\n\nMessage_Replied_For:\n\n{message_replied_for} \n\nSOT_MESSAGE:\n\n{message}"
             logger.info(message_content)
             asyncio.run(send_message(message_content,emergency=True,event_id=event_id))
 
 
         # check message received is a revised signal:
-        if re.search(revised_signal, message, flags=re.IGNORECASE) and message_replied_for is not None:
+        if not _is_signal_channel and re.search(revised_signal, message, flags=re.IGNORECASE) and message_replied_for is not None:
             logger.info("------------------------------------------------------------------")
             logger.info(f"Signal Update Recevied For:\n")
             logger.info(f"{message_replied_for}\n\n")
@@ -1787,7 +1796,7 @@ async def analyse_event(event):
             else:
                 asyncio.run(send_message(f"⚠️ Broken Revised Entry Signal:\n\n{message}\n\nmay be missing near or above",emergency=True,event_id=event_id))
             logger.info("------------------------------------------------------------------")
-        elif re.search(revised_signal, message, flags=re.IGNORECASE):
+        elif not _is_signal_channel and re.search(revised_signal, message, flags=re.IGNORECASE):
             asyncio.run(send_message(f"⚠️ Broken Revised Entry Signal:\n\n{message}\n\nI Don't know what to do with this!",emergency=True,event_id=event_id))
             message_content = f"Recent Loss Position:\n- {latest_live_position_in_loss}\n\nRecent Live Postion:\n- {latest_live_position}"
             asyncio.run(send_message(message_content))
@@ -1795,7 +1804,7 @@ async def analyse_event(event):
         #  check if received message is a re-entry signal
         # entry_agin_regex_pattern = r"(entry again|enter again|again enter|will enter|will take|re entry|entry)"
         entry_agin_regex_pattern = r"(entry again|enter again|again enter|will enter|will take|re entry|re ent)"
-        if re.search(entry_agin_regex_pattern, message, flags=re.IGNORECASE):
+        if not _is_signal_channel and re.search(entry_agin_regex_pattern, message, flags=re.IGNORECASE):
             logger.info("------------------------------------------------------------------")
             logger.info(f"Re-Entry Signal Update Recevied: {message}")
             if recent_loss_postion is not None:
