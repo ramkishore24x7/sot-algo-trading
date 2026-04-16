@@ -543,6 +543,44 @@ class LLMSignalParser:
             return _dict_to_signal(self.context.active_signal)
         return None
 
+    def get_best_reference(self, hint: "ParsedSignal" = None) -> Optional["ParsedSignal"]:
+        """Best reference signal for a REENTER/follow-up with no explicit reply-chain.
+
+        Scans ALL signals fired today (signal_store), not just the current active one.
+        If hint carries instrument/strike/ce_pe, filters to matching signals first.
+        Among candidates, returns the most recent (highest msg_id).
+        Falls back to get_active() when the store is empty.
+
+        This handles the "5 trades, 2 hit SL, 6th is a re-entry" case correctly —
+        the re-entry intent can match any of the day's trades, not just the last one.
+        """
+        store = self.context.signal_store
+        if not store:
+            return self.get_active()
+
+        # Sort by msg_id descending so most recent is first
+        pairs = sorted(store.items(), key=lambda x: x[0], reverse=True)
+
+        # Filter by instrument/strike/ce_pe if hint provides any of them
+        if hint and any([hint.instrument, hint.strike, hint.ce_pe]):
+            matched = [
+                (mid, d) for mid, d in pairs
+                if (hint.instrument is None or d.get("instrument") == hint.instrument)
+                and (hint.strike is None or str(d.get("strike", "")) == str(hint.strike or ""))
+                and (hint.ce_pe is None or d.get("ce_pe") == hint.ce_pe)
+            ]
+            if matched:
+                pairs = matched
+            # If nothing matched the filters, fall through and use all signals
+
+        _, best_dict = pairs[0]
+        best = _dict_to_signal(best_dict)
+        logger.info(
+            f"[LLM] get_best_reference: store has {len(store)} signal(s) today, "
+            f"selected most recent match → {best.summary()}"
+        )
+        return best
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

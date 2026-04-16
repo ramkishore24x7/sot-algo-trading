@@ -1461,15 +1461,22 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None, 
     # that was fired for that parent message.  This is far more reliable than
     # relying on "the most recent active signal" — especially when the mentor
     # gives multiple signals in a day or re-enters the same trade from scratch.
-    def _reference_signal():
-        """Return the most relevant signal for this follow-up message."""
+    def _reference_signal(hint=None):
+        """Return the most relevant signal for this follow-up message.
+
+        Priority:
+          1. Telegram reply-chain — exact msg_id match (most reliable)
+          2. signal_store scan — all signals fired today, filtered by
+             instrument/strike/ce_pe from hint if available, most recent first
+             (handles "5 trades, 2 SL-hit, re-enter 6th" correctly)
+        """
         if reply_to_msg_id:
             ref = llm_parser.get_by_msg_id(reply_to_msg_id)
             if ref:
                 logger.info(f"[LLM] Reply-chain: resolved to msg_id={reply_to_msg_id} → {ref.summary()}")
                 return ref
-        # Fallback: use whichever signal is currently active
-        return llm_parser.get_active()
+        # Fallback: scan today's full signal history, prefer instrument/strike match
+        return llm_parser.get_best_reference(hint)
 
     # ── NEW_SIGNAL ───────────────────────────────────────────────────────────
     if intent == "NEW_SIGNAL":
@@ -1540,8 +1547,8 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None, 
     elif intent == "REENTER":
         # Prefer the reply-chain reference — if the mentor replied to the
         # original signal message, that's the exact trade to re-enter.
-        # Falls back to the most recent active signal if no reply link.
-        reference = _reference_signal()
+        # Falls back to signal_store scan (all today's signals, best match).
+        reference = _reference_signal(hint=signal)
         if reference and reference.is_actionable():
             # Merge any non-null fields from this message over the reference —
             # handles "re-enter above 380" (new entry level / strategy) while
@@ -1574,7 +1581,7 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None, 
     # ── UPDATE_SL ────────────────────────────────────────────────────────────
     elif intent == "UPDATE_SL":
         # Use reply-chain to identify which trade this SL update belongs to.
-        reference = _reference_signal()
+        reference = _reference_signal(hint=signal)
         await send_message(
             f"📢 LLM: SL Update detected.\n"
             f"New SL: {signal.sl}"

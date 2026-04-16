@@ -745,6 +745,76 @@ class ReplyChainTests(unittest.TestCase):
         parser.signal_fired(sig)   # no msg_id
         self.assertIsNotNone(parser.get_active())
 
+    # ── get_best_reference ────────────────────────────────────────────────────
+
+    def test_best_reference_returns_active_when_store_empty(self):
+        """No signals fired yet → falls back to active_signal."""
+        parser = _make_parser({})
+        sig = self._make_active(instrument="NIFTY", strike="25500", ce_pe="CE")
+        parser.signal_fired(sig)       # sets active but no msg_id → store empty
+        result = parser.get_best_reference()
+        self.assertIsNotNone(result)
+        self.assertEqual(result.instrument, "NIFTY")
+
+    def test_best_reference_returns_most_recent_when_no_hint(self):
+        """No hint provided → returns the signal with the highest msg_id."""
+        parser = _make_parser({})
+        s1 = self._make_active(instrument="NIFTY", strike="25500", ce_pe="CE",
+                                entry_low=215, entry_high=220)
+        s2 = self._make_active(instrument="NIFTY", strike="25500", ce_pe="PE",
+                                entry_low=190, entry_high=195)
+        parser.signal_fired(s1, msg_id=100)
+        parser.signal_fired(s2, msg_id=200)
+        result = parser.get_best_reference()
+        self.assertEqual(result.ce_pe, "PE",
+                         "Most recent (msg_id=200) should be returned when no hint")
+
+    def test_best_reference_filters_by_instrument_ce_pe(self):
+        """5-trade scenario: hint targets an earlier CE — must return it, not the latest PE."""
+        parser = _make_parser({})
+        ce_trade = self._make_active(instrument="SENSEX", strike="78500", ce_pe="CE",
+                                     entry_low=530, entry_high=540)
+        pe_trade = self._make_active(instrument="SENSEX", strike="78500", ce_pe="PE",
+                                     entry_low=440, entry_high=450)
+        parser.signal_fired(ce_trade, msg_id=100)
+        parser.signal_fired(pe_trade, msg_id=200)  # most recent → active
+
+        # Hint says CE — should match the CE trade, not the latest PE
+        hint = ParsedSignal(intent="REENTER", instrument="SENSEX",
+                            strike="78500", ce_pe="CE")
+        result = parser.get_best_reference(hint)
+        self.assertEqual(result.ce_pe, "CE",
+                         "CE hint must resolve to CE trade even though PE is more recent")
+
+    def test_best_reference_multiple_same_contract_returns_latest(self):
+        """Mentor gave the same contract twice. Re-entry should use the second one."""
+        parser = _make_parser({})
+        s1 = self._make_active(instrument="NIFTY", strike="25500", ce_pe="PE",
+                                entry_low=190, entry_high=195)
+        s2 = self._make_active(instrument="NIFTY", strike="25500", ce_pe="PE",
+                                entry_low=210, entry_high=215)
+        parser.signal_fired(s1, msg_id=100)
+        parser.signal_fired(s2, msg_id=200)
+        hint = ParsedSignal(intent="REENTER", instrument="NIFTY",
+                            strike="25500", ce_pe="PE")
+        result = parser.get_best_reference(hint)
+        self.assertEqual(result.entry_low, 210,
+                         "Second signal (msg_id=200) must win when both match same contract")
+
+    def test_best_reference_falls_through_to_all_when_no_match(self):
+        """Hint specifies an instrument not in store → return most recent anyway."""
+        parser = _make_parser({})
+        sig = self._make_active(instrument="NIFTY", strike="25500", ce_pe="CE",
+                                 entry_low=215, entry_high=220)
+        parser.signal_fired(sig, msg_id=100)
+        # Hint asks for BANKNIFTY which was never fired
+        hint = ParsedSignal(intent="REENTER", instrument="BANKNIFTY",
+                            strike="52000", ce_pe="PE")
+        result = parser.get_best_reference(hint)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.instrument, "NIFTY",
+                         "No BANKNIFTY in store → fall through to most recent (NIFTY)")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. Screenshot-identified edge cases
