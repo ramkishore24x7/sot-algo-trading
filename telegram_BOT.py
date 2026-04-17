@@ -41,6 +41,7 @@ from utils.constants import Config
 from utils.demat import Demat
 from utils.position import Position
 from utils.llm_signal_parser import LLMSignalParser, is_noise as llm_is_noise
+from utils import shadow_mode
 
 # # Remember to use your own values from my.telegram.org!
 # ram
@@ -1207,6 +1208,7 @@ def wrapup_day():
         f"| sl_updates={_eod_sl_updates} | exits={_eod_exits} "
         f"| builds_triggered={len(sot_cmds)}"
     )
+    logger.warning(shadow_mode.eod_summary())
 
     logger.info(f"Received Stop Trading Singal - Generating Today's PnL Report!")
     generate_PnL_report()
@@ -1640,6 +1642,7 @@ async def analyse_event(event):
     global recent_loss_postion
     global latest_live_position
     global latest_live_position_in_loss
+    global _eod_signals_fired, _eod_reenters
     
     # Pattern to match revised signals by SOT
     revised_signal = r"(?:take one entry (?:at|above|near|mear)|buy \d{1,2}[-\d{1,2}]? lots?|buy \d{1,2}[-\d{1,2}]? lot (?:at|above|near|mear)|now entry (?:at|above|near|mear)|now enter (?:at|above|near|mear))|one entry|take entry|now enter|enter now|entry now|now entry|more move|next move"
@@ -1670,12 +1673,16 @@ async def analyse_event(event):
             # reply_to_msg_id is the ID of the parent message (the original signal).
             reply_to_msg_id = getattr(event.message, 'reply_to_msg_id', None)
             llm_signal = llm_parser.parse(actual_message, msg_id=event_id, is_edit=is_edit)
+            _v1_eod_before = _eod_signals_fired + _eod_reenters
             if llm_signal.intent != "NOISE":
                 await handle_llm_intent(llm_signal, event_id, actual_message,
                                         source_chat_id=event.chat_id,
                                         reply_to_msg_id=reply_to_msg_id)
-                # LLM handled this message — skip regex path entirely to avoid
-                # double-triggers on exit/re-entry/revised-signal patterns.
+            _v1_fired = (_eod_signals_fired + _eod_reenters) > _v1_eod_before
+            shadow_mode.record(llm_signal, raw_message=actual_message,
+                               event_id=event_id, chat_id=event.chat_id,
+                               v1_fired=_v1_fired)
+            if llm_signal.intent != "NOISE":
                 return
             # LLM said NOISE for a signal-channel message — skip the actionable
             # regex blocks (exit, revised_signal, re-entry) which have broad

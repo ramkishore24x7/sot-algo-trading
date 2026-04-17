@@ -156,6 +156,16 @@ async def send_message(message,emergency=False):
         logger.error(f"Error in send_message. {e}")
         logger.error(f"Error Trace: {traceback.print_exc()}")
 
+
+def _send_message_sync(message, emergency=False):
+    """Thread-safe wrapper — callable from PriceDispatcher background threads."""
+    future = asyncio.run_coroutine_threadsafe(send_message(message, emergency), _tg_loop)
+    try:
+        future.result(timeout=5)
+    except Exception as e:
+        logger.error(f"_send_message_sync failed: {e}")
+
+
 instrument_name = None
 if stock_option_input.upper().startswith("NIF"):
     instrument_name = "NIFTY"
@@ -171,8 +181,7 @@ elif stock_option_input.upper().startswith("SEN"):
     instrument_name = "SENSEX"
 else:
     exception_content = f"{Clock.tictoc()} Nifty || MidCPNifty || BankNifty || FinNifty || BajFinance || Sensex ONLY. Received '{stock_option_input}'"
-    client.loop.run_until_complete(send_message(exception_content,emergency=True))
-    raise Exception(exception_content)
+    raise Exception(exception_content)  # Telethon not started yet — can't send
 
 exchangeSymbol = Config.exchange_map.get(instrument_name, "NSE:")
 expiry = Config.expiry_map.get(instrument_name, None)
@@ -295,7 +304,13 @@ bot_token = "6744137962:AAFOFp0rwyK-ddZ9NRFf0XlgCXgoQgAbyWU"
 bot_tokens = ["6476234483:AAHoQHtdKv8aHfmUgJG14ETxsZnqXjtutwU","6412363785:AAE7ULHsAj1Y77ctZCGy_4t06zQVJgkMo8I","6868900803:AAHhCtYa1ypF6VC-oK1BO1SaPBQSEEGSdcY","6868256714:AAGliJ2kDv_Op-EFsqEEcibNOLXfR6EAyUM","6437478156:AAH_K7XwS-_Tj2IhFz4f_dJjPUDMBxWnS0A","6665535957:AAES8e32_jwvLGybQUyJwNjcjhA8sd36mj8","6679914693:AAGGX6E8-nnnc7u0E6RVZW7cgfwDfwssBhI","6483776327:AAGfbgUKheJbw_XTO5wf3KSHvxGnjD_0I_U","6985446292:AAFydqdZtPTrjlKuQu3pk7UT3BugY6dKnZA"]
 
 tc_session_name = f"{Config.logger_path}/{name}_{str(uuid.uuid4())}"
-client = TelegramClient(tc_session_name, api_id, api_hash)
+
+# Dedicated event loop — always running in a background thread so that
+# run_coroutine_threadsafe from PriceDispatcher threads always works.
+_tg_loop = asyncio.new_event_loop()
+threading.Thread(target=lambda: _tg_loop.run_forever(), name="tg-loop", daemon=True).start()
+
+client = TelegramClient(tc_session_name, api_id, api_hash, loop=_tg_loop)
 
 trade_manager = TradeManager(demats,logger=logger)
 
@@ -331,10 +346,10 @@ def send_calculated_pnL():
 
         sorted_pnl = sorted(pnl_sum.items(), key=lambda x: x[1], reverse=True)
         pnl = '\n'.join([f"{account}: {round(pnl)}/-" for account, pnl in sorted_pnl])
-        client.loop.run_until_complete(send_message(f"\nCurrent Trade PnL:\n{pnl}"))
+        _send_message_sync(f"\nCurrent Trade PnL:\n{pnl}")
         pnl_sent = True
     else:
-        client.loop.run_until_complete(send_message("No PnL generated so far!"))
+        _send_message_sync("No PnL generated so far!")
 
 def send_order_placement_erros(heading,orders):
     message_content = ""
@@ -344,7 +359,7 @@ def send_order_placement_erros(heading,orders):
     if message_content:
         message_content = f"\n\n🚨 {heading}: 🚨\n\n{message_content}"
         logger.warning(f"{message_content}")
-        client.loop.run_until_complete(send_message(message_content,emergency=True))
+        _send_message_sync(message_content, emergency=True)
 
 def fetchLTP(name):
     ltp = -1
@@ -359,7 +374,7 @@ def fetchLTP(name):
     except Exception as e:
         if entered_trade:
             api_response_formatted = format_flattened_dict_as_string(response,"API Response:")
-            client.loop.run_until_complete(send_message(f"🆘 CHUCK EVERYTHING AND LOOK INTO THIS!\n\n{api_response_formatted}"))
+            _send_message_sync(f"🆘 CHUCK EVERYTHING AND LOOK INTO THIS!\n\n{api_response_formatted}")
         logger.error(f"{name}: Failed : {e}")
         logger.error(f"Error Trace: {traceback.print_exc()}")
     return ltp,response
@@ -378,16 +393,16 @@ def getLTP(option,spot=False):
             success = True
         except Exception as e:
             if entered_trade and (counter % 3 == 0):
-                client.loop.run_until_complete(send_message(f"🚨🚨🚨\n\nOpen Postion & {instrument_name} Websocket is acting up, relying on API for every 3 Seconds!",emergency=True))
+                _send_message_sync(f"🚨🚨🚨\n\nOpen Postion & {instrument_name} Websocket is acting up, relying on API for every 3 Seconds!",emergency=True)
                 success = True
                 api_mode = True
                 resp, fetchLTP_resp  = fetchLTP(option)
 
             if entered_trade and (counter % 15 == 0):
-                client.loop.run_until_complete(send_message(f"🆘 \n\nOpen Postion & {instrument_name} Websocket hung up, retried #{counter} times.\n\nReply STOP on this message to gain manual control and EXIT trade when LTP reaches {stop_loss}/-",emergency=True))
+                _send_message_sync(f"🆘 \n\nOpen Postion & {instrument_name} Websocket hung up, retried #{counter} times.\n\nReply STOP on this message to gain manual control and EXIT trade when LTP reaches {stop_loss}/-",emergency=True)
                 alert_sent = True
             if entered_trade and (counter == (max_attempts - 30)):
-                client.loop.run_until_complete(send_message(f"🆘 \n\nLast 30 Seconds to take manual control ain't will auto square off all postions!",emergency=True))
+                _send_message_sync(f"🆘 \n\nLast 30 Seconds to take manual control ain't will auto square off all postions!",emergency=True)
                 alert_sent = True
             logger.error(f"Exception @getLTP:{e}")
             logger.error(f"Error Trace: {traceback.print_exc()}")
@@ -400,7 +415,7 @@ def getLTP(option,spot=False):
     elif resp is not None:
         data = resp.json()
         if alert_sent:
-            client.loop.run_until_complete(send_message(f"👻\n\nHuh, Relax! {instrument_name} Websocket is now restored!",emergency=True))
+            _send_message_sync(f"👻\n\nHuh, Relax! {instrument_name} Websocket is now restored!",emergency=True)
         return data
     else:
         message_conent = f"🫢\n\nLooks SOT_BOT couldn't connect to {instrument_name} websocket for LTP, gave up after #{counter} attempts!"
@@ -408,7 +423,7 @@ def getLTP(option,spot=False):
             send_order_placement_erros("SQUARE-OFF POSITION",trade_manager.square_off_position(position,-1))
             message_conent = f"😢 🆘 🆘 🆘\n\nLooks SOT_BOT couldn't connect to {instrument_name} websocket for LTP, gave up after #{counter} attempts! Squared Off {option} via API, Ensure We've Exited the positions on all LIVE Demats!"
         logger.error(message_conent)
-        client.loop.run_until_complete(send_message(message_conent,emergency=True))
+        _send_message_sync(message_conent, emergency=True)
         exit()
 
 def ensureGetLTP(option,spot=None):
@@ -425,12 +440,12 @@ def ensureGetLTP(option,spot=None):
         send_order_placement_erros("SQUARE-OFF POSITION",trade_manager.square_off_position(position,cmp))
         message_conent = f"😢 🆘 🆘 🆘\n\n Fyers {instrument_name} Websockets are down and API , LTP retrieved is -1 for continuous #{max_attempts} attempts! Squared Off {option} via API, Ensure We've Exited the positions on all LIVE Demats!"
         logger.error(message_conent)
-        client.loop.run_until_complete(send_message(message_conent,emergency=True))
+        _send_message_sync(message_conent, emergency=True)
         exit()
     elif cmp == -1 and not isInValidTrade:
         message_conent = f"Phew!\n\n Fyers {instrument_name} Websockets are down, LTP retrieved is -1 for continuous #{max_attempts} attempts! You might want to retry this build, if you see Fyers is back and stable!"
         logger.error(message_conent)
-        client.loop.run_until_complete(send_message(message_conent,emergency=True))
+        _send_message_sync(message_conent, emergency=True)
         exit()
     return cmp
 
@@ -463,7 +478,14 @@ def getPrevCandle(option,timeframe):
             if response["s"] == "ok":
                 candles = response["candles"]
                 if candles:
-                    last_candle = candles[-1]
+                    # Skip the currently-forming candle (timestamp == current minute).
+                    # Fyers immediately adds the forming candle so candles[-1] is often
+                    # the live unfinished one; we want the last CLOSED candle.
+                    current_minute = int(time.time()) // 60
+                    closed = [c for c in candles if c[0] // 60 < current_minute]
+                    if not closed:
+                        return None
+                    last_candle = closed[-1]
                     result = {
                         "open": last_candle[1],
                         "high": last_candle[2],
@@ -476,13 +498,16 @@ def getPrevCandle(option,timeframe):
             logger.error(f"Error Trace: {traceback.print_exc()}")
         return result
 
-def isLastMinute(current_timestamp, previous_timestamp,minute=1):
+def isLastMinute(current_timestamp, previous_timestamp, minute=1):
     logger.info(f"current_timestamp: {current_timestamp}")
     logger.info(f"previous_timestamp: {previous_timestamp}")
-    return (current_timestamp // 60) - (previous_timestamp // 60) == minute
+    diff = (current_timestamp // 60) - (previous_timestamp // 60)
+    logger.info(f"candle age (minutes): {diff}")
+    # Accept candles up to 3 minutes old — Fyers history API can be 1-2 min late
+    return 1 <= diff <= 3
 
 def prevCandle(option, timeframe):
-    max_retries = 15
+    max_retries = 100  # 30 s — enough for Fyers to serve the just-closed candle
     retries = 0
 
     while retries <= max_retries:
@@ -577,10 +602,10 @@ class TradeHandler:
                 f"Late entry: fill {self.current_entry_price}/- > T1 {targets_list[0]}/-. "
                 f"Skipping T1 booking. All lots ride to T2+. SL → {self.stop_loss}/-"
             )
-            client.loop.run_until_complete(send_message(
+            _send_message_sync(
                 f"⚡ Late entry at {self.current_entry_price}/- (above T1={targets_list[0]}). "
                 f"Skipping T1, riding to T2+. SL={self.stop_loss}/-"
-            ))
+            )
 
         logger.warning(f"almost_target1: {self.almost_target1} i.e {entry_price + self.almost_target1}")
         logger.warning(f"almost_target2: {self.almost_target2} i.e {target1 + self.almost_target2}")
@@ -619,8 +644,7 @@ class TradeHandler:
     # This is the body of the old `while not traded:` loop, now called
     # by PriceDispatcher instead of blocking and polling.
     # NOTE: called from dispatcher's background thread.
-    # Uses client.loop.run_until_complete() — same loop Telethon connected on.
-    # asyncio.run() would create a new loop which Telethon rejects at send time.
+    # Uses _send_message_sync() (asyncio.run_coroutine_threadsafe) — thread-safe.
     # ------------------------------------------------------------------
 
     def on_price(self, cmp: float):
@@ -633,7 +657,7 @@ class TradeHandler:
         print("Live: ", self.option, " : PnL: ", live_pnl, " INR ", next(spinner), end="\r", flush=True)
 
         if not self._message_sent:
-            client.loop.run_until_complete(send_message(f"{cmp}/- ♐️🍀 LIVE POSITION"))
+            _send_message_sync(f"{cmp}/- ♐️🍀 LIVE POSITION")
             self._message_sent = True
 
         try:
@@ -650,7 +674,7 @@ class TradeHandler:
                 logger.critical(f"stop_loss hit! closed at {self.stop_loss}/-; Highest LTP: {self.ltpHigh}/-")
                 print("Closed: ", self.option)
                 smiley = "🤑" if live_pnl > 0 else "🤐 khata khata hatha vidhi!"
-                client.loop.run_until_complete(send_message(f"{gain} Points! {smiley} | Peak Gain: {self.peak_gain}"))
+                _send_message_sync(f"{gain} Points! {smiley} | Peak Gain: {self.peak_gain}")
                 reason = "EOD_SQUAREOFF" if not Clock.is_time_less_than(trade_exit_hour, trade_exit_minute) else "SL"
                 if not re_entered and not self._soldAtTarget1 and re_entry:
                     self._finish(exit_price=cmp, reason=reason)
@@ -736,7 +760,7 @@ class TradeHandler:
                     # keep legacy flags in sync for play_safe trail blocks
                     if i == 0: self._soldAtTarget1 = True
                     if i == 1: self._soldAtTarget2 = True
-                    client.loop.run_until_complete(send_message(f"{smileys} {gain} Points{'!' if is_last else '...'}"))
+                    _send_message_sync(f"{smileys} {gain} Points{'!' if is_last else '...'}")
 
                     if i == 0:
                         # First target hit: SL → cost/break-even (sl_at_cost),
@@ -830,7 +854,7 @@ def check_entry(option):
         if cmp == -1:
             message_conent = f"🙊 Probably an Invalid Strike as CMP is {cmp} or {instrument_name} Websocket has hung up! Run Diagnosis and then RETRY Build: #{buildNumber}"
             logger.error(message_conent)
-            client.loop.run_until_complete(send_message(message_conent,emergency=True))
+            _send_message_sync(message_conent, emergency=True)
             raise Exception(message_conent)
         closestLTP = cmp
         logger.warning(f"{spot} received a spot to be checked for")
@@ -857,8 +881,9 @@ def check_entry(option):
                 cmp = ensureGetLTP(option)
                 if second_entry_price is not None and second_entry_price <= int(cmp) < entry_price+1:
                     takeEntry(option, cmp)
+                    break  # trade done; don't re-enter await loop after exit
                 elif cmp < static_stoploss:
-                    client.loop.run_until_complete(send_message(f"🚨 Looks {instrument_name} Websocket hung while awaiting entry at {entry_price}, CMP is {cmp} now below stoploss. Aborting the Trade.\n\n{pprint.pformat(vars(position))}",emergency=True))
+                    _send_message_sync(f"🚨 Looks {instrument_name} Websocket hung while awaiting entry at {entry_price}, CMP is {cmp} now below stoploss. Aborting the Trade.\n\n{pprint.pformat(vars(position))}",emergency=True)
                     exit()
                 else:
                     closestLTP = cmp if cmp < closestLTP else closestLTP
@@ -872,7 +897,7 @@ def check_entry(option):
                     if almost and cmp >= target1:
                         message_content = f"Its likely that we missed the trade by {closest_diff} points. Aborting this call!"
                         logger.warning(message_content)
-                        client.loop.run_until_complete(send_message(message_content))
+                        _send_message_sync(message_content)
                         exit()
 
                     print("Awaiting: ",option,next(spinner), end="\r", flush=True)
@@ -902,11 +927,11 @@ def check_entry(option):
                         takeEntry(option, int(prevCandleClose))
                 elif  prevCandleClose is not None and prevCandleClose >= target1:
                     logger.info(f"Previous Candle Close price was greater than target1, aborting taking a trade. Prev Candle Close: {prevCandleClose}")
-                    client.loop.run_until_complete(send_message(f"🙊 Previous Candle Close price was greater than target1, aborting taking a trade. Prev Candle Close: {prevCandleClose}",emergency=True))
+                    _send_message_sync(f"🙊 Previous Candle Close price was greater than target1, aborting taking a trade. Prev Candle Close: {prevCandleClose}",emergency=True)
                     break
                 elif prevCandleClose is None:
                     logger.warning(f"Option: {option} Previous Candle retrived as None. Aborting Taking a trade.")
-                    client.loop.run_until_complete(send_message(f"🙊 Previous Candle retrived as None. Aborting Taking a trade!",emergency=True))
+                    _send_message_sync(f"🙊 Previous Candle retrived as None. Aborting Taking a trade!",emergency=True)
                     break
                 elif round(int(prevCandleClose)) >= entry_price + almost_breakout_price and not almost:
                     almost_price = int(prevCandleClose)
@@ -914,7 +939,7 @@ def check_entry(option):
                 elif almost and round(int(prevCandleClose)) <= static_stoploss:
                     message_content = f"😎 Ah! Price made the high of {almost_price}/- and hit the stoploss. Aborting this call!"
                     logger.warning(message_content)
-                    client.loop.run_until_complete(send_message(f"🙈 \n{message_content}",emergency=True))
+                    _send_message_sync(f"🙈 \n{message_content}",emergency=True)
                     exit()
                 else:
                     print("Awaiting: ",option,next(spinner), end="\r", flush=True)
@@ -923,11 +948,11 @@ def check_entry(option):
         if not Clock.is_time_less_than(bot_exit_hour,bot_exit_minute):
             message_conent = f"🙈🙉🙊 \nTime Up... BOT Aborted!!"
             logger.warning(f"{message_conent}")
-            client.loop.run_until_complete(send_message(message_conent))
+            _send_message_sync(message_conent)
     except Exception as e:
         message_conent = f"Exception at Check Entry: {e}\n\nTrace:\n {traceback.print_exc()}"
         logger.error(f"Error Trace: {traceback.print_exc()}")
-        client.loop.run_until_complete(send_message(message_conent,emergency=True))
+        _send_message_sync(message_conent, emergency=True)
 
 
 # =============================================================================
@@ -969,7 +994,7 @@ if __name__ == '__main__':
     for bot_token in bot_tokens:
         try:
             logger.debug(f"bot_token: {bot_token}")
-            client.start(bot_token=bot_token)
+            asyncio.run_coroutine_threadsafe(client.start(bot_token=bot_token), _tg_loop).result(timeout=30)
             messenger = True
             logger.info(f"bot_token in use: {bot_token}")
             break
@@ -983,11 +1008,11 @@ if __name__ == '__main__':
 
     if any([isInValidTrade, cmp_below_entry_price, cmp_below_second_entry_price, cmp_above_target1]):
         if messenger:
-            client.loop.run_until_complete(send_message(message_content,emergency=True))
+            _send_message_sync(message_content, emergency=True)
         logger.error(message_content)
         exit()
 
-    client.loop.run_until_complete(send_message(message_content))
+    _send_message_sync(message_content)
     logger.warning(f"{bot_name} is now activated...")
 
     # Start the dispatcher — one polling loop for this process
