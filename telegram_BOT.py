@@ -1447,6 +1447,24 @@ def _position_from_llm(signal) -> Position:
     )
 
 
+def _adjust_targets_for_reentry(targets: list, entry_price: float, min_count: int = 4) -> list:
+    """
+    When re-entering at a higher price, drop stale targets at/below entry_price,
+    then extend using the same inter-target delta until min_count targets remain.
+    Works for both RANGE and BREAKOUT strategies (targets are always above entry).
+    """
+    if len(targets) >= 2:
+        delta = max(targets[-1] - targets[-2], 5)
+    else:
+        delta = 20
+    valid = [t for t in targets if t > entry_price]
+    base = valid[-1] if valid else entry_price
+    while len(valid) < min_count:
+        base += delta
+        valid.append(int(base))
+    return valid
+
+
 async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None, reply_to_msg_id=None):
     """Route LLM-parsed intent to the right action."""
     global llm_parser
@@ -1565,6 +1583,13 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None, 
                 merged.sl = signal.sl
             if signal.targets:
                 merged.targets = signal.targets
+            # Adjust targets for new (higher) entry — drop stale, extend with same delta
+            new_entry = merged.entry_high or merged.entry_low or 0
+            if new_entry:
+                original_targets = list(merged.targets or [])
+                merged.targets = _adjust_targets_for_reentry(merged.targets or [], new_entry)
+                if merged.targets != original_targets:
+                    logger.info(f"[REENTER] targets adjusted for entry={new_entry}: {original_targets} → {merged.targets}")
             position = _position_from_llm(merged)
             logger.info(f"[LLM] REENTER → {merged.summary()}")
             await send_message(
