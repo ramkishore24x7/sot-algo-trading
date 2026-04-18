@@ -1107,23 +1107,22 @@ def update_gsheet():
         # Open the existing Google Sheets document
         spreadsheet = client.open("SOT_BOT_DATA")
 
+        headers = data.columns.tolist()
+
         # Try to get the worksheet by title
         try:
             worksheet = spreadsheet.worksheet(month_name)
+            existing_rows = worksheet.get_all_values()
+            # Write headers if tab exists but is empty
+            if not existing_rows:
+                worksheet.append_row(headers)
         except WorksheetNotFound:
-            # If the worksheet does not exist, create a new one
-            worksheet = spreadsheet.add_worksheet(title=month_name, rows="100", cols="20")
+            # New tab — write headers first, then data rows will follow
+            worksheet = spreadsheet.add_worksheet(title=month_name, rows="500", cols="40")
+            worksheet.append_row(headers)
 
-        # Convert the DataFrame to a list of lists
+        # Append data rows only (no headers — already written above)
         data_list = data.values.tolist()
-
-        # Get the DataFrame's column headers as a list
-        headers = data.columns.tolist()
-
-        # Add the headers to the beginning of the data list
-        data_list.insert(0, headers)
-
-        # Append the data list to the worksheet
         worksheet.append_rows(data_list)
 
         asyncio.run(send_message("Uploaded PnL!"))
