@@ -316,21 +316,41 @@ Older/uppercase format (same logic, just all caps and BUY prefix):
 - TARGST, TATGET, TRAGET, TAGET, TARET, TARGWT → all mean Target
 
 ## Common follow-up patterns and their intents
-- "Re-enter", "re-enter same", "add more near X" → REENTER
-- "Enter above X", "entry above X", "enter at X" (short reply to a signal, mentor revising entry level) → REENTER with strategy=BREAKOUT
-- "From this zone market gave good move", "we will take small risk", "entering again here", "will try again" (mentor hinting at re-entry after previous trade closed) → REENTER
+
+### Re-entry / revised entry (REENTER)
+- "Re-enter", "re-enter same", "add more near X", "same call", "same trade", "same signal" → REENTER
+- "Enter above X", "entry above X", "try above X", "enter at X" (short reply revising entry) → REENTER with strategy=BREAKOUT
+- "Entry again near X", "enter again near X", "will enter near X", "will take near X", "re entry near X" → REENTER
+- "From this zone market gave good move", "we will take small risk", "entering again here", "will try again" → REENTER
+- A bare price range "480-490" or single level "530" as a reply to an active signal → REENTER (mentor revising the entry level)
+- "Near X-Y" or "above X" as a standalone reply (no full signal format) → REENTER with new entry extracted
+
+### SL management (UPDATE_SL)
 - "Sl updated to 210", "sl now 195", "sl 185" as standalone → UPDATE_SL
-- "Sl at cost 165", "keep sl at cost 590", "sl at cost and hold" as standalone (mid-trade) → UPDATE_SL with sl_at_cost=true, sl=<the number if present>
-- "Ignore previous", "cancel", "don't take", "avoid this" → CANCEL
-- "Book X lots", "book X lot", "book X lot total", "book 50%", "partial book here" → PARTIAL_EXIT (any message with "book" + a number of lots/percentage)
-- "Remaining lot exit at 190", "exit at 190", "exit remaining at X" → UPDATE_SL with sl=X (mentor is setting a new exit/SL level, not asking to exit now)
+- "Trail sl to X", "move sl to X", "shift sl to X", "sl shift to X" → UPDATE_SL
+- "Sl at cost 165", "keep sl at cost 590", "sl at cost and hold" (mid-trade) → UPDATE_SL with sl_at_cost=true, sl=<the number if present>
+
+### Cancellation (CANCEL)
+- "Ignore previous", "cancel", "don't take", "avoid this", "don't enter", "no trade", "avoid" → CANCEL
+- "Mistake", "wrong call", "ignore that" → CANCEL
+
+### Partial exit (PARTIAL_EXIT)
+- "Book X lots", "book X lot", "book 50%", "book half", "book 1 lot", "partial book here" → PARTIAL_EXIT
+
+### Full exit (FULL_EXIT)
 - "Exit", "close all", "square off" (without a specific price level) → FULL_EXIT
-- "395🚀🚀", "target done", "target was also done" → NOISE
-- "Good morning", "wonderful day", screenshots → NOISE
-- "Track both levels", "watch both", "keep eye on" → NOISE
+- "Remaining lot exit at 190", "exit at 190", "exit remaining at X" → UPDATE_SL with sl=X (mentor setting new exit/SL level, not asking to exit now)
+
+### Deferred SL
 - "Sl - I will update" / "Sl - Will update" / "Sl - I will update on the basis of market move" → NEW_SIGNAL with sl_deferred=true
 - A message that gives just a number after a signal with deferred SL → SL_RESOLVED
-- Expiry mention like "12th june expiry" / "May exp" at the end of a signal → part of the signal notes, not a separate intent
+
+### Noise (NOISE)
+- "395🚀🚀", "target done", "target was also done", "T1 done", "T2 done", "target 1 hit", "next target" → NOISE
+- "Good morning", "wonderful day", screenshots → NOISE
+- "Track both levels", "watch both", "keep eye on" → NOISE
+- Price-running updates: "🚀🚀", emojis only, celebration messages → NOISE
+- Expiry mention like "12th june expiry" / "May exp" at end of a signal → part of signal notes, not a separate intent
 
 ## Important rules
 - Signals may or may not start with "BUY" — the instrument name alone is enough
