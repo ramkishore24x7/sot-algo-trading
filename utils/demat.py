@@ -53,7 +53,7 @@ class Demat(Config):
     def generatePnL(self):
         today = date.today()
         current_month = datetime.now().month
-        month_name = calendar.month_name[current_month]
+        month_name = f"{calendar.month_name[current_month]}'{str(datetime.now().year)[-2:]}"
 
         today_date = datetime.strptime(str(today), "%Y-%m-%d")
         # To get the week number

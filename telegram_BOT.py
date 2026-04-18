@@ -1096,7 +1096,7 @@ def generate_SOT_Summary():
 
 def update_gsheet():
     current_month = datetime.now().month
-    month_name = calendar.month_name[current_month]
+    month_name = f"{calendar.month_name[current_month]}'{str(datetime.now().year)[-2:]}"
     # month_name = "January"
     report = Config.logger_path + "/" + str(date.today()) + ".csv"
     # Load the data
