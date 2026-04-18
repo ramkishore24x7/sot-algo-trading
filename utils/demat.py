@@ -48,6 +48,7 @@ class Demat(Config):
         self.exit_time = None
         self.build_number = ""
         self.instrument = None
+        self.exit_reason = None
 
     def generatePnL(self):
         today = date.today()
@@ -58,7 +59,7 @@ class Demat(Config):
         # To get the week number
         week_number = str(today_date.strftime("%U"))
         # name of csv file 
-        headers = ["Bot","BuildNumber","Date","Month","Week","Day","EntryTime","ExitTime","AccountName","isBreakoutStrategy","onCrossingAbove","SquaredOffAtFirstTarget","isAveraged","awaitNextTarget","AggressiveTrail","Instrument","Option","Quantity","AvgEntryPrice","ExitPrice","PnL","Exposure","Points","PaperTrading"]
+        headers = ["Bot","BuildNumber","Date","Month","Week","Day","EntryTime","ExitTime","AccountName","isBreakoutStrategy","onCrossingAbove","SquaredOffAtFirstTarget","isAveraged","awaitNextTarget","AggressiveTrail","Instrument","CE_PE","Option","Quantity","AvgEntryPrice","ExitPrice","SL","T1","T2","T3","ExitReason","PnL","CapitalDeployed","ROI_pct","Points","Duration_secs","Duration_mins","PaperTrading"]
         filename = (str(self.build_number) + "#" + str(self.position.strike).replace("NSE:","") + "_" + str(today) + "_" + str(uuid.uuid4()) + "_pnl.csv")
         # writing to csv file 
         with open(Config.logger_path+"/"+filename, 'w+') as csvfile: 
@@ -67,7 +68,28 @@ class Demat(Config):
             # writing the fields 
             csvwriter.writerow(headers) 
             # writing the data rows
-            csvwriter.writerows([[self.bot,self.build_number,today,month_name,week_number,datetime.now().strftime("%A"),time.strftime("%H:%M:%S", time.localtime(self.entry_time)),time.strftime("%H:%M:%S", time.localtime(self.exit_time)),self.account.name,self.position.isBreakoutStrategy,self.position.onCrossingAbove,self.squareoff_at_first_target,self.isAveraged,self.account.await_next_target,self.account.aggressive_trail,self.instrument,self.position.strike,self.total_trading_quantity,self.average_price,self.position.exit_price,self.PnL,self.exit_time-self.entry_time,self.position.exit_price - self.average_price,self.paper_trading]])
+            capital_deployed = round(self.total_trading_quantity * self.average_price, 2)
+            roi_pct = round(self.PnL / capital_deployed * 100, 2) if capital_deployed else 0
+            duration_secs = round(self.exit_time - self.entry_time, 1)
+            duration_mins = round(duration_secs / 60, 1)
+            csvwriter.writerows([[
+                self.bot, self.build_number, today, month_name, week_number,
+                datetime.now().strftime("%A"),
+                time.strftime("%H:%M:%S", time.localtime(self.entry_time)),
+                time.strftime("%H:%M:%S", time.localtime(self.exit_time)),
+                self.account.name,
+                self.position.isBreakoutStrategy, self.position.onCrossingAbove,
+                self.squareoff_at_first_target, self.isAveraged,
+                self.account.await_next_target, self.account.aggressive_trail,
+                self.instrument, self.position.ce_pe, self.position.strike,
+                self.total_trading_quantity, self.average_price, self.position.exit_price,
+                self.position.stoploss, self.position.target1, self.position.target2, self.position.target3,
+                self.exit_reason,
+                self.PnL, capital_deployed, roi_pct,
+                round(self.position.exit_price - self.average_price, 2),
+                duration_secs, duration_mins,
+                self.paper_trading,
+            ]])
     
     def print_demat_status(self):
         self.logger.debug("------------------------------------------------")
@@ -275,6 +297,7 @@ class Demat(Config):
                 self.remaining_quantity = self.remaining_quantity - self.remaining_quantity
                 self.position_open = False
                 self.position.exit_price = price
+                self.exit_reason = "T1_SQUAREOFF"
                 self.logger.info(f"{self.account.name} : Position: {self.position.strike} : Total PnL: {self.PnL}/-")
                 self.generatePnL()
                 self.print_demat_status()
@@ -319,6 +342,7 @@ class Demat(Config):
             self.position_open = False
 
             self.position.exit_price = price
+            self.exit_reason = "T3"
             self.logger.debug(f"{self.account.name} : Position: {self.position.strike} : Traded {self.remaining_quantity} and Profit Booked at Target3: {profit_booked_at_target3}/- : sellOrderID: {sellOrderID}")
             self.logger.info(f"{self.account.name} : Position: {self.position.strike} : Total PnL: {self.PnL}/-")
             self.generatePnL()
@@ -354,6 +378,7 @@ class Demat(Config):
             self.position_open = False
             self.position.exit_price = price
             label = f"Target{target_index + 1}(LAST)" if is_last else "Target1(SQUAREOFF)"
+            self.exit_reason = f"T{target_index + 1}" if is_last else "T1_SQUAREOFF"
             self.logger.info(f"{self.account.name} : {label}: Closed {sell_qty} @ {price}/- Profit: {profit}/- PnL: {self.PnL}/-")
             self.generatePnL()
             self.print_demat_status()
@@ -446,12 +471,14 @@ class Demat(Config):
             self.logger.info(f"{self.account.name} : Position: {self.position.strike} : Total PnL: {self.PnL}")
             self.position_open = False
             self.position.exit_price = price
+            if not self.exit_reason:
+                self.exit_reason = "SL"
             self.generatePnL()
             self.print_demat_status()
             return sellOrderID
         else:
             None
-    
+
     def square_off_position_aggressive_trail(self,position,price):
         if self.position_open and self.account.aggressive_trail:
             return self.square_off_position(position,price)
