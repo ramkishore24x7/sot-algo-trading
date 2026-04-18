@@ -317,6 +317,7 @@ Older/uppercase format (same logic, just all caps and BUY prefix):
 
 ## Common follow-up patterns and their intents
 - "Re-enter", "re-enter same", "add more near X" → REENTER
+- "Enter above X", "entry above X", "enter at X" (short reply to a signal, mentor revising entry level) → REENTER with strategy=BREAKOUT
 - "From this zone market gave good move", "we will take small risk", "entering again here", "will try again" (mentor hinting at re-entry after previous trade closed) → REENTER
 - "Sl updated to 210", "sl now 195", "sl 185" as standalone → UPDATE_SL
 - "Sl at cost 165", "keep sl at cost 590", "sl at cost and hold" as standalone (mid-trade) → UPDATE_SL with sl_at_cost=true, sl=<the number if present>
