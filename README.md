@@ -89,12 +89,20 @@ GSHEET_SCOPES = [
 ]
 
 # ── Lot sizes (update when SEBI changes contract sizes) ───────────────────────
-LOT_SIZE_NIFTY        = 75
+LOT_SIZE_NIFTY        = 65
 LOT_SIZE_BANKNIFTY    = 30
-LOT_SIZE_FINNIFTY     = 65
+LOT_SIZE_FINNIFTY     = 60
 LOT_SIZE_MIDCPNIFTY   = 120
 LOT_SIZE_BAJFINANCE   = 750
 LOT_SIZE_SENSEX       = 20
+
+# ── Paper trading quantities — 10 lots each ───────────────────────────────────
+PAPER_QTY_NIFTY        = 650   # 10 × 65
+PAPER_QTY_BANKNIFTY    = 300   # 10 × 30
+PAPER_QTY_FINNIFTY     = 600   # 10 × 60
+PAPER_QTY_MIDCPNIFTY   = 1200  # 10 × 120
+PAPER_QTY_BAJFINANCE   = 7500  # 10 × 750
+PAPER_QTY_SENSEX       = 200   # 10 × 20
 ```
 
 Also set the API key in your shell (sourced from `.aliases`):

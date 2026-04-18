@@ -87,6 +87,9 @@ _eod_sl_updates       = 0   # UPDATE_SL messages handled
 _eod_exits            = 0   # FULL_EXIT / PARTIAL_EXIT messages handled
 _eod_noise_skipped    = 0   # messages dropped by pre-filter (rough count)
 
+# Signals below this confidence are held for manual review instead of auto-firing
+LLM_MIN_FIRE_CONFIDENCE = 0.55
+
 # Configure the logging settings
 name = __file__.split("/")[-1].split(".")[0]
 name_suffix = str(date.today()) + "_" + str(uuid.uuid4())
@@ -1546,10 +1549,27 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None, 
             return
 
         if not signal.is_actionable():
+            missing = []
+            if signal.instrument is None:              missing.append("instrument")
+            if signal.strike is None:                  missing.append("strike")
+            if signal.ce_pe is None:                   missing.append("CE/PE")
+            if len(signal.targets) < 2:                missing.append(f"targets(<2, got {len(signal.targets)})")
+            if signal.sl is None and not signal.sl_deferred: missing.append("SL")
+            llm_parser.signal_pending(signal)
             await send_message(
-                f"⚠️ LLM: Incomplete signal (confidence={conf:.0%}).\n"
+                f"🔴 INCOMPLETE SIGNAL — NOT fired. Missing: {', '.join(missing)}\n"
+                f"Confidence: {conf:.0%}\n{signal.summary()}\n\n"
+                f"Waiting for follow-up or intervene manually.\n\nRaw:\n{raw_message}",
+                emergency=True, event_id=event_id, source_chat_id=sc
+            )
+            return
+
+        if conf < LLM_MIN_FIRE_CONFIDENCE:
+            llm_parser.signal_pending(signal)
+            await send_message(
+                f"⚠️ LOW CONFIDENCE ({conf:.0%}) — NOT auto-fired. Review manually.\n\n"
                 f"{signal.summary()}\n\nRaw:\n{raw_message}",
-                event_id=event_id, source_chat_id=sc
+                emergency=True, event_id=event_id, source_chat_id=sc
             )
             return
 

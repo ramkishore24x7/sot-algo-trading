@@ -162,14 +162,14 @@ GSHEET_CREDS = {
 }
 
 # ── Lot sizes (update when SEBI changes contract sizes) ──────────────────────
-LOT_SIZE_NIFTY        = 75
+LOT_SIZE_NIFTY        = 65
 LOT_SIZE_BANKNIFTY    = 30
-LOT_SIZE_FINNIFTY     = 65
+LOT_SIZE_FINNIFTY     = 60
 LOT_SIZE_MIDCPNIFTY   = 120
 LOT_SIZE_BAJFINANCE   = 750
 LOT_SIZE_SENSEX       = 20
 
-FREEZE_QUANTITY_NIFTY        = 1350
+FREEZE_QUANTITY_NIFTY        = 1170
 FREEZE_QUANTITY_BANKNIFTY    = 900
 FREEZE_QUANTITY_FINNIFTY     = 1800
 FREEZE_QUANTITY_MIDCPNIFTY   = 4200
@@ -182,6 +182,14 @@ HIGHEST_FINNIFTY_OPTION_PRICE    = 250
 HIGHEST_MIDCPNIFTY_OPTION_PRICE  = 250
 HIGHEST_BAJFINANCE_OPTION_PRICE  = 250
 HIGHEST_SENSEX_OPTION_PRICE      = 1500
+
+# ── Paper trading quantities — 10 lots each ──────────────────────────────────
+PAPER_QTY_NIFTY        = 650   # 10 × 65
+PAPER_QTY_BANKNIFTY    = 300   # 10 × 30
+PAPER_QTY_FINNIFTY     = 600   # 10 × 60
+PAPER_QTY_MIDCPNIFTY   = 1200  # 10 × 120
+PAPER_QTY_BAJFINANCE   = 7500  # 10 × 750
+PAPER_QTY_SENSEX       = 200   # 10 × 20
 CREDS_EOF
   warn "Template written to utils/credentials.py — fill in your real values before running the bot"
 fi
