@@ -27,6 +27,14 @@ try:
 except ImportError:
     _CREDS_API_KEY = None
 
+# Optional: openai package used for Ollama fallback (OpenAI-compatible local API)
+try:
+    import openai as _openai_lib
+    _openai_available = True
+except ImportError:
+    _openai_lib = None
+    _openai_available = False
+
 logger = logging.getLogger(__name__)
 
 # ── Noise detection (skip before even calling LLM) ───────────────────────────
@@ -118,6 +126,7 @@ INTENTS = {
     "PARTIAL_EXIT",   # Book X lots / X%
     "FULL_EXIT",      # Exit everything
     "NOISE",          # No trading content
+    "LLM_ERROR",      # API/parse failure — never silently dropped, always SOS-alerted
 }
 
 
@@ -415,7 +424,9 @@ class LLMSignalParser:
     """
 
     def __init__(self, api_key: Optional[str] = None, model: str = "claude-haiku-4-5-20251001",
-                 persist_path: Optional[str] = None):
+                 persist_path: Optional[str] = None,
+                 fallback_ollama_model: Optional[str] = None,
+                 fallback_ollama_url: str = "http://localhost:11434/v1"):
         key = (
             api_key
             or os.environ.get("ANTHROPIC_API_KEY")
@@ -430,6 +441,20 @@ class LLMSignalParser:
         self.client = anthropic.Anthropic(api_key=key)
         self.model = model
         self.context = DayContext(persist_path=persist_path)
+
+        # Optional local Ollama fallback — used when Claude API fails
+        self._ollama_model = fallback_ollama_model
+        self._ollama_client = None
+        if fallback_ollama_model:
+            if _openai_available:
+                self._ollama_client = _openai_lib.OpenAI(
+                    base_url=fallback_ollama_url,
+                    api_key="ollama",  # Ollama ignores API key but openai lib requires one
+                )
+                logger.info(f"[LLMSignalParser] Ollama fallback enabled: model={fallback_ollama_model} url={fallback_ollama_url}")
+            else:
+                logger.warning("[LLMSignalParser] fallback_ollama_model set but 'openai' package not installed — fallback disabled. Run: pip install openai")
+
         # Restore today's context from disk if available (survives restarts)
         if not self.context._load():
             logger.info("[LLMSignalParser] No persisted context found — starting fresh.")
@@ -458,6 +483,7 @@ class LLMSignalParser:
             message=text.strip(),
         )
 
+        raw = ""
         try:
             response = self.client.messages.create(
                 model=self.model,
@@ -472,10 +498,16 @@ class LLMSignalParser:
             data = json.loads(raw)
         except json.JSONDecodeError as e:
             logger.error(f"[LLM] JSON parse error: {e} | raw={raw!r}")
-            return ParsedSignal(intent="NOISE", notes="LLM returned invalid JSON", raw_message=text)
+            if self._ollama_client:
+                logger.warning("[LLM] Trying Ollama fallback after JSON parse error...")
+                return self._parse_with_ollama(user_prompt, text)
+            return ParsedSignal(intent="LLM_ERROR", notes=f"JSON parse error: {e}", raw_message=text)
         except Exception as e:
-            logger.error(f"[LLM] API error: {e}")
-            return ParsedSignal(intent="NOISE", notes=f"LLM error: {e}", raw_message=text)
+            logger.error(f"[LLM] Claude API error: {e}")
+            if self._ollama_client:
+                logger.warning("[LLM] Trying Ollama fallback after API error...")
+                return self._parse_with_ollama(user_prompt, text)
+            return ParsedSignal(intent="LLM_ERROR", notes=f"Claude API error: {e}", raw_message=text)
 
         # Validate intent
         intent = data.get("intent", "NOISE")
@@ -516,6 +548,56 @@ class LLMSignalParser:
 
         logger.info(f"[LLM] msg={msg_id} → {signal.summary()}")
         return signal
+
+    def _parse_with_ollama(self, user_prompt: str, text: str) -> "ParsedSignal":
+        """Fallback parser using local Ollama (OpenAI-compatible API).
+
+        Returns LLM_ERROR if Ollama also fails, so the caller always gets
+        a non-NOISE result that triggers the SOS alert in telegram_BOT.py.
+        """
+        raw = ""
+        try:
+            response = self._ollama_client.chat.completions.create(
+                model=self._ollama_model,
+                max_tokens=512,
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user",   "content": user_prompt},
+                ],
+            )
+            raw = response.choices[0].message.content.strip()
+            raw = re.sub(r'^```(?:json)?\s*', '', raw)
+            raw = re.sub(r'\s*```$', '', raw)
+            data = json.loads(raw)
+            intent = data.get("intent", "NOISE")
+            if intent not in INTENTS:
+                intent = "NOISE"
+            signal = ParsedSignal(
+                intent=intent,
+                confidence=float(data.get("confidence", 0.4)),
+                instrument=data.get("instrument"),
+                strike=str(data.get("strike")) if data.get("strike") else None,
+                ce_pe=data.get("ce_pe"),
+                strategy=data.get("strategy"),
+                entry_low=_int_or_none(data.get("entry_low")),
+                entry_high=_int_or_none(data.get("entry_high")),
+                targets=[int(t) for t in data.get("targets", []) if _int_or_none(t)],
+                sl=_int_or_none(data.get("sl")),
+                sl_deferred=bool(data.get("sl_deferred", False)),
+                sl_at_cost=bool(data.get("sl_at_cost", False)),
+                wait_for_price=bool(data.get("wait_for_price", True)),
+                notes=f"[OLLAMA:{self._ollama_model}] " + data.get("notes", ""),
+                raw_message=text,
+            )
+            logger.warning(f"[LLM] Ollama fallback succeeded → {signal.summary()}")
+            return signal
+        except Exception as e:
+            logger.error(f"[LLM] Ollama fallback also failed: {e} | raw={raw!r}")
+            return ParsedSignal(
+                intent="LLM_ERROR",
+                notes=f"Claude API down AND Ollama failed: {e}",
+                raw_message=text,
+            )
 
     def signal_fired(self, signal: ParsedSignal, msg_id: int = None):
         """Call this after SOT_BOT is triggered so context tracks active trade.

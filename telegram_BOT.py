@@ -1503,6 +1503,16 @@ async def handle_llm_intent(signal, event_id, raw_message, source_chat_id=None, 
         # Fallback: scan today's full signal history, prefer instrument/strike match
         return llm_parser.get_best_reference(hint)
 
+    # ── LLM_ERROR — Claude API down/balance/key expired ─────────────────────
+    if intent == "LLM_ERROR":
+        await send_message(
+            f"🆘 SOS: LLM PARSE FAILED — signal NOT processed!\n\n"
+            f"Reason: {signal.notes}\n\n"
+            f"Act manually on this message:\n\n{raw_message}",
+            emergency=True, event_id=event_id, source_chat_id=sc,
+        )
+        return
+
     # ── NEW_SIGNAL ───────────────────────────────────────────────────────────
     if intent == "NEW_SIGNAL":
         # If instrument is missing, try to inherit from the active signal
@@ -1697,7 +1707,7 @@ async def analyse_event(event):
             reply_to_msg_id = getattr(event.message, 'reply_to_msg_id', None)
             llm_signal = llm_parser.parse(actual_message, msg_id=event_id, is_edit=is_edit)
             _v1_eod_before = _eod_signals_fired + _eod_reenters
-            if llm_signal.intent != "NOISE":
+            if llm_signal.intent not in ("NOISE",):
                 await handle_llm_intent(llm_signal, event_id, actual_message,
                                         source_chat_id=event.chat_id,
                                         reply_to_msg_id=reply_to_msg_id)
