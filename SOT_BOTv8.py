@@ -991,10 +991,13 @@ if __name__ == '__main__':
         cmp_above_target1 = True
         message_content = f"🚨 Improbable Signal:\n\nCMP is {cmp}/- at the time of script trigger is already hihger than Target1 i.e {target1}/- & signaled to enter ABOVE entry price of {entry_price}/-\n\n{pos_data}"
 
+    async def _start_bot(token):
+        await client.start(bot_token=token)
+
     for bot_token in bot_tokens:
         try:
             logger.debug(f"bot_token: {bot_token}")
-            asyncio.run_coroutine_threadsafe(client.start(bot_token=bot_token), _tg_loop).result(timeout=30)
+            asyncio.run_coroutine_threadsafe(_start_bot(bot_token), _tg_loop).result(timeout=30)
             messenger = True
             logger.info(f"bot_token in use: {bot_token}")
             break
