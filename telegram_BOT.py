@@ -124,7 +124,8 @@ logger.addHandler(file_handler)
 # ── LLM Signal Parser ────────────────────────────────────────────────────────
 try:
     llm_parser = LLMSignalParser(
-        persist_path=Config.logger_path + "/llm_context.json"
+        persist_path=Config.logger_path + "/llm_context.json",
+        fallback_ollama_model="llama3.2",
     )
     logger.info("LLMSignalParser initialised successfully")
 except Exception as _llm_err:
