@@ -86,6 +86,7 @@ _eod_reenters         = 0   # REENTER triggers
 _eod_sl_updates       = 0   # UPDATE_SL messages handled
 _eod_exits            = 0   # FULL_EXIT / PARTIAL_EXIT messages handled
 _eod_noise_skipped    = 0   # messages dropped by pre-filter (rough count)
+_eod_noise_log: list  = []  # signal-channel messages LLM classified as NOISE
 
 # Signals below this confidence are held for manual review instead of auto-firing
 LLM_MIN_FIRE_CONFIDENCE = 0.55
@@ -1211,6 +1212,9 @@ def wrapup_day():
         f"| sl_updates={_eod_sl_updates} | exits={_eod_exits} "
         f"| builds_triggered={len(sot_cmds)}"
     )
+    if _eod_noise_log:
+        noise_preview = "\n".join(f"  - {m}" for m in _eod_noise_log[:20])
+        logger.info(f"[EOD_NOISE_LOG] signal-channel msgs classified NOISE ({len(_eod_noise_log)} total, first 20):\n{noise_preview}")
     logger.warning(shadow_mode.eod_summary())
 
     logger.info(f"Received Stop Trading Singal - Generating Today's PnL Report!")
@@ -1725,8 +1729,11 @@ async def analyse_event(event):
             # Capture reply-chain link — if this message is a Telegram reply,
             # reply_to_msg_id is the ID of the parent message (the original signal).
             reply_to_msg_id = getattr(event.message, 'reply_to_msg_id', None)
-            llm_signal = llm_parser.parse(actual_message, msg_id=event_id, is_edit=is_edit)
+            llm_signal = llm_parser.parse(actual_message, msg_id=event_id, is_edit=is_edit, signal_channel=True)
             _v1_eod_before = _eod_signals_fired + _eod_reenters
+            if llm_signal.intent == "NOISE":
+                _eod_noise_log.append(actual_message[:120])
+                _eod_noise_skipped += 1
             if llm_signal.intent not in ("NOISE",):
                 await handle_llm_intent(llm_signal, event_id, actual_message,
                                         source_chat_id=event.chat_id,

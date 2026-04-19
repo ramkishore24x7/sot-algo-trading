@@ -526,8 +526,8 @@ class LLMParserTests(unittest.TestCase):
 
     # ── Invalid JSON / API error ────────────────────────────────────────────────
 
-    def test_invalid_json_returns_noise(self):
-        """If LLM returns invalid JSON, parser must return NOISE gracefully."""
+    def test_invalid_json_returns_llm_error(self):
+        """If LLM returns invalid JSON (and no Ollama), parser must return LLM_ERROR."""
         mock_client = MagicMock()
         mock_msg    = MagicMock()
         mock_msg.content = [MagicMock(text="not valid json {{{")]
@@ -537,13 +537,13 @@ class LLMParserTests(unittest.TestCase):
         with patch.object(_anthropic, 'Anthropic', return_value=mock_client):
             parser = LLMSignalParser(api_key='test-key')
         parser.client = mock_client
+        parser._ollama_client = None   # ensure no fallback
 
         sig = parser.parse("some valid looking message here today", msg_id=14)
-        self.assertEqual(sig.intent, "NOISE")
-        self.assertIn("invalid JSON", sig.notes)
+        self.assertEqual(sig.intent, "LLM_ERROR")
 
-    def test_api_error_returns_noise(self):
-        """API exception → NOISE, no crash."""
+    def test_api_error_returns_llm_error(self):
+        """API exception (and no Ollama) → LLM_ERROR, no crash."""
         mock_client = MagicMock()
         mock_client.messages.create.side_effect = Exception("API timeout")
 
@@ -551,9 +551,10 @@ class LLMParserTests(unittest.TestCase):
         with patch.object(_anthropic, 'Anthropic', return_value=mock_client):
             parser = LLMSignalParser(api_key='test-key')
         parser.client = mock_client
+        parser._ollama_client = None   # ensure no fallback
 
         sig = parser.parse("Nifty 25500 CE near 215-220 Target 230 SL 204", msg_id=15)
-        self.assertEqual(sig.intent, "NOISE")
+        self.assertEqual(sig.intent, "LLM_ERROR")
 
     # ── Markdown fence stripping ────────────────────────────────────────────────
 
@@ -1018,6 +1019,63 @@ class PersistenceTests(unittest.TestCase):
         ref = p2.get_by_msg_id(1234)
         self.assertIsNotNone(ref, "signal_store entry must be restored after restart")
         self.assertEqual(ref.entry_low, 215)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. LLM_ERROR intent + signal_channel bypass
+# ─────────────────────────────────────────────────────────────────────────────
+class LLMErrorTests(unittest.TestCase):
+
+    def _make_failing_parser(self, side_effect=None, bad_json=False):
+        mock_client = MagicMock()
+        if bad_json:
+            mock_msg = MagicMock()
+            mock_msg.content = [MagicMock(text="not valid json {{{")]
+            mock_client.messages.create.return_value = mock_msg
+        else:
+            mock_client.messages.create.side_effect = side_effect or Exception("API timeout")
+        import anthropic as _anthropic
+        with patch.object(_anthropic, 'Anthropic', return_value=mock_client):
+            parser = LLMSignalParser(api_key='test-key')
+        parser.client = mock_client
+        parser._ollama_client = None   # no fallback
+        return parser
+
+    def test_api_exception_returns_llm_error(self):
+        """Claude API raises → LLM_ERROR, no silent NOISE drop."""
+        parser = self._make_failing_parser(side_effect=Exception("balance exhausted"))
+        sig = parser.parse("Nifty 25500 CE near 215-220 Target 230 SL 204", msg_id=50)
+        self.assertEqual(sig.intent, "LLM_ERROR")
+        self.assertIn("balance exhausted", sig.notes)
+
+    def test_json_error_returns_llm_error(self):
+        """Invalid JSON from LLM → LLM_ERROR, not NOISE."""
+        parser = self._make_failing_parser(bad_json=True)
+        sig = parser.parse("some valid looking message here today", msg_id=51)
+        self.assertEqual(sig.intent, "LLM_ERROR")
+
+    def test_pre_filter_bypassed_for_signal_channel(self):
+        """signal_channel=True: noise-phrase message must reach LLM, not be silently dropped."""
+        parser = _make_parser(_new_signal_json())
+        # "good morning" normally hits the pre-filter and returns NOISE without calling LLM
+        parser.parse("good morning", msg_id=52, signal_channel=True)
+        # LLM must have been called
+        parser.client.messages.create.assert_called()
+
+    def test_pre_filter_active_for_non_signal_channel(self):
+        """signal_channel=False (default): noise phrase is caught before LLM call."""
+        parser = _make_parser(_new_signal_json())
+        sig = parser.parse("good morning", msg_id=53, signal_channel=False)
+        self.assertEqual(sig.intent, "NOISE")
+        parser.client.messages.create.assert_not_called()
+
+    def test_llm_error_carries_raw_message(self):
+        """LLM_ERROR signal must preserve raw_message for the SOS alert."""
+        raw = "Nifty 25500 CE near 215-220 Target 230 SL 204"
+        parser = self._make_failing_parser(side_effect=Exception("key expired"))
+        sig = parser.parse(raw, msg_id=54)
+        self.assertEqual(sig.intent, "LLM_ERROR")
+        self.assertEqual(sig.raw_message, raw)
 
 
 if __name__ == "__main__":

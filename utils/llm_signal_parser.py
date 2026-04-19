@@ -211,10 +211,10 @@ class DayContext:
             return True
         return False
 
-    def add_message(self, text: str, msg_id: int, is_edit: bool = False):
+    def add_message(self, text: str, msg_id: int, is_edit: bool = False, signal_channel: bool = False):
         if self._should_reset():
             self._reset()
-        if is_noise(text):
+        if not signal_channel and is_noise(text):
             return
         entry = {
             "id": msg_id,
@@ -460,18 +460,18 @@ class LLMSignalParser:
             logger.info("[LLMSignalParser] No persisted context found — starting fresh.")
         logger.info(f"LLMSignalParser initialised with model={model}")
 
-    def parse(self, text: str, msg_id: int = 0, is_edit: bool = False) -> ParsedSignal:
+    def parse(self, text: str, msg_id: int = 0, is_edit: bool = False, signal_channel: bool = False) -> ParsedSignal:
         """
         Main entry point. Returns a ParsedSignal for every message.
-        Noise is filtered before the API call — cheap and fast.
+        When signal_channel=True, skip pre-filter — send everything to LLM.
         """
-        # Fast path: obvious noise
-        if is_noise(text):
+        # Fast path: obvious noise (skip for signal channels to avoid false drops)
+        if not signal_channel and is_noise(text):
             logger.debug(f"[LLM] msg={msg_id} → NOISE (pre-filter)")
             return ParsedSignal(intent="NOISE", raw_message=text)
 
         # Add to context window (before calling LLM so context is up to date)
-        self.context.add_message(text, msg_id, is_edit)
+        self.context.add_message(text, msg_id, is_edit, signal_channel=signal_channel)
 
         # Build prompt
         user_prompt = _USER_TEMPLATE.format(

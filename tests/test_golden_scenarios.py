@@ -183,9 +183,41 @@ APR16 = [
     ),
 ]
 
+# ── Edge cases — intents not covered by Apr15/Apr16 ──────────────────────────
+EDGE_CASES = [
+    _sig(
+        "Close all positions now",
+        "FULL_EXIT",
+        "Explicit full exit",
+    ),
+    _sig(
+        "Ignore the last call, don't take it",
+        "CANCEL",
+        "Cancel with no pending — must not crash",
+    ),
+    _sig(
+        "Shift target to 650/700/750",
+        "UPDATE_TARGET",
+        "Target revision mid-trade",
+    ),
+    _sig(
+        "Nifty 25500 CE near 215-220\nTarget 230/240/255\nSl - I will update",
+        "NEW_SIGNAL",
+        "Deferred SL — incomplete signal, must NOT be actionable",
+        instrument="NIFTY", strike="25500", ce_pe="CE",
+        sl_deferred=True, actionable=False,
+    ),
+    _sig(
+        "185",
+        "SL_RESOLVED",
+        "Bare SL number resolves previously deferred signal",
+    ),
+]
+
 SESSIONS = {
-    "Apr15": APR15,
-    "Apr16": APR16,
+    "Apr15":      APR15,
+    "Apr16":      APR16,
+    "EdgeCases":  EDGE_CASES,
 }
 
 
@@ -273,8 +305,12 @@ def run_session(name: str, specs: list, verbose: bool) -> tuple[int, int]:
         # (BREAKOUT addons, UPDATE_SL, PARTIAL_EXIT) have the correct active context.
         if sig.intent == "NEW_SIGNAL" and sig.is_actionable():
             parser.signal_fired(sig, msg_id=i)
-        elif sig.intent in ("FULL_EXIT",):
+        elif sig.intent == "NEW_SIGNAL" and not sig.is_actionable():
+            parser.signal_pending(sig)
+        elif sig.intent == "FULL_EXIT":
             parser.signal_closed()
+        elif sig.intent == "CANCEL":
+            parser.context.clear_pending()
 
         intent_ok   = sig.intent == expected
         field_fails = _check(sig, spec)
