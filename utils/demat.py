@@ -124,6 +124,11 @@ class Demat(Config):
             self.quantity = self.account.quantity_midcpnifty
             self.instrument = "MIDCPNIFTY"
         
+        elif "SENSEX" in self.position.strike:
+            self.logger.debug(f"{self.account.name} Setting Quantity for SENSEX: {self.account.quantity_sensex}")
+            self.quantity = self.account.quantity_sensex
+            self.instrument = "SENSEX"
+
         elif "NIFTY" in self.position.strike:
             self.logger.debug(f"{self.account.name} Setting Quantity for NIFTY: {self.account.quantity_nifty}")
             self.quantity = self.account.quantity_nifty
@@ -136,6 +141,16 @@ class Demat(Config):
             self.quantity = self.position.lot_size
             self.quantity2 = self.quantity
             self.logger.warning(f"{self.account.name} Quantity Found to be None. Chosen 1 lot and Marked for paper trade.")
+        elif self.quantity % self.position.lot_size != 0:
+            corrected = (self.quantity // self.position.lot_size) * self.position.lot_size
+            if corrected == 0:
+                corrected = self.position.lot_size
+            self.logger.warning(
+                f"{self.account.name} Quantity {self.quantity} is not a multiple of lot_size "
+                f"{self.position.lot_size} — rounding down to {corrected}."
+            )
+            self.quantity = corrected
+            self.quantity2 = self.quantity
 
         if self.quantity % self.position.lot_size != 0:
             self.logger.error(f"{self.account.name} Expected quantity to be in multiple of {self.position.lot_size} for {self.position.strike} instead received {self.quantity}")

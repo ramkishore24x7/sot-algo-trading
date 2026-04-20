@@ -906,16 +906,18 @@ def check_entry(option):
             logger.debug(f"Safe Entry Price: {safe_entry_price}")
             almost = False
             almost_price = 0
-            while not entered_trade and not isBreakoutStrategy and onCrossingAbove and Clock.is_time_less_than(bot_exit_hour,bot_exit_minute):
+            _entry_attempted = False  # separate from entered_trade — never reset by _finish()
+            while not _entry_attempted and not isBreakoutStrategy and onCrossingAbove and Clock.is_time_less_than(bot_exit_hour,bot_exit_minute):
                 prevCandleClose = ohlc(option,1)["close"] if ohlc(option,1) is not None else None
                 if prevCandleClose is not None and prevCandleClose >= entry_price and prevCandleClose <= target1:
                     if enterFewPointsAbove:
                         logger.info("Previous Candle has closed above expectations, will wait for another few points.")
-                        while not entered_trade:
+                        while not _entry_attempted:
                             cmp = ensureGetLTP(option)
                             logger.debug(f"Current Market Price: {cmp}/-")
                             if  entry_price + 5 <= round(int(cmp)) <= target1:
                                 logger.info(f"Taking Entry now as its enterFewPointsAbove: {cmp}/-")
+                                _entry_attempted = True
                                 takeEntry(option, cmp)
                             else:
                                 closestLTP = cmp if cmp < closestLTP else closestLTP
@@ -924,6 +926,7 @@ def check_entry(option):
                                 time.sleep(.3)
                     else:
                         logger.info(f"Previous Candle Close: {prevCandleClose}")
+                        _entry_attempted = True
                         takeEntry(option, int(prevCandleClose))
                 elif  prevCandleClose is not None and prevCandleClose >= target1:
                     logger.info(f"Previous Candle Close price was greater than target1, aborting taking a trade. Prev Candle Close: {prevCandleClose}")

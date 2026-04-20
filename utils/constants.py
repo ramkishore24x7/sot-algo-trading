@@ -445,7 +445,8 @@ class Config:
         "day": ""
     }
 
-    # GSHEET_SCOPES and GSHEET_CREDS imported from utils.credentials (kept out of git)
+    GSHEET_CREDS  = GSHEET_CREDS
+    GSHEET_SCOPES = GSHEET_SCOPES
 
     password = "Srisairam1606$"
     # kill_banknifty_ws = f"echo '{password}' | sudo -S kill -9 $(lsof -t -i:4001 -sTCP:LISTEN); sleep 5; exit"

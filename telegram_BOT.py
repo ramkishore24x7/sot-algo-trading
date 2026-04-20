@@ -1143,7 +1143,9 @@ def generate_PnL_report():
     sort -u -o merged.csv merged.csv
     """
     report = Config.logger_path + "/" + str(date.today()) + ".csv"
-    run_os_cmd(f"cat {Config.logger_path}/*.csv > {report}")
+    # Exclude the output file from the glob — cat *.csv > output.csv includes itself
+    # and creates a circular write that fills the disk.
+    run_os_cmd(f"find {Config.logger_path} -maxdepth 1 -name '*_pnl.csv' | xargs cat > {report}")
     time.sleep(2)
     run_os_cmd(f"sort -u -o {report} {report}")
     time.sleep(2)
