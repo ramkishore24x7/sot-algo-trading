@@ -1699,8 +1699,8 @@ async def analyse_event(event):
     global recent_loss_postion
     global latest_live_position
     global latest_live_position_in_loss
-    global _eod_signals_fired, _eod_reenters
-    
+    global _eod_signals_fired, _eod_reenters, _eod_noise_skipped, _eod_noise_log
+
     # Pattern to match revised signals by SOT
     revised_signal = r"(?:take one entry (?:at|above|near|mear)|buy \d{1,2}[-\d{1,2}]? lots?|buy \d{1,2}[-\d{1,2}]? lot (?:at|above|near|mear)|now entry (?:at|above|near|mear)|now enter (?:at|above|near|mear))|one entry|take entry|now enter|enter now|entry now|now entry|more move|next move"
     
