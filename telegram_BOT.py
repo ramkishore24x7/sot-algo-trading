@@ -70,7 +70,7 @@ username = Config.ci_username
 api_token = Config.ci_token
 password = Config.ci_username
 try:
-    jenkins = Jenkins(jenkins_url, username, api_token)
+    jenkins = Jenkins(jenkins_url, username, api_token, timeout=10)
 except Exception as _jenkins_err:
     print(f"[WARNING] Jenkins not available at {jenkins_url} — CI features disabled. ({_jenkins_err.__class__.__name__})")
     jenkins = None
