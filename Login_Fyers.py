@@ -86,18 +86,18 @@ class SmartLogin():
         PIN = options['PIN']
 
         URL_SEND_LOGIN_OTP="https://api-t2.fyers.in/vagator/v2/send_login_otp_v2"
-        URL_SEND_LOGIN_OTP_RESPONSE = requests.post(url=URL_SEND_LOGIN_OTP, json={"fy_id": self.getEncodedString(FY_ID),"app_id":"2"}).json()
+        URL_SEND_LOGIN_OTP_RESPONSE = requests.post(url=URL_SEND_LOGIN_OTP, json={"fy_id": self.getEncodedString(FY_ID),"app_id":"2"}, timeout=15).json()
         print(f"[{options['account_name']}] send_login_otp: {URL_SEND_LOGIN_OTP_RESPONSE}")
 
         if datetime.now().second % 30 > 27 : sleep(5)
         URL_VERIFY_OTP="https://api-t2.fyers.in/vagator/v2/verify_otp"
-        URL_VERIFY_OTP_RESPONSE = requests.post(url=URL_VERIFY_OTP, json= {"request_key":URL_SEND_LOGIN_OTP_RESPONSE["request_key"],"otp":pyotp.TOTP(TOTP_KEY).now()}).json()
+        URL_VERIFY_OTP_RESPONSE = requests.post(url=URL_VERIFY_OTP, json= {"request_key":URL_SEND_LOGIN_OTP_RESPONSE["request_key"],"otp":pyotp.TOTP(TOTP_KEY).now()}, timeout=15).json()
         print(f"[{options['account_name']}] verify_otp: {URL_VERIFY_OTP_RESPONSE}")
 
         ses = requests.Session()
         URL_VERIFY_OTP2="https://api-t2.fyers.in/vagator/v2/verify_pin_v2"
         payload2 = {"request_key": URL_VERIFY_OTP_RESPONSE["request_key"],"identity_type":"pin","identifier":self.getEncodedString(PIN)}
-        URL_VERIFY_OTP2_RESPONSE = ses.post(url=URL_VERIFY_OTP2, json= payload2).json()
+        URL_VERIFY_OTP2_RESPONSE = ses.post(url=URL_VERIFY_OTP2, json= payload2, timeout=15).json()
         print(f"[{options['account_name']}] verify_pin: {URL_VERIFY_OTP2_RESPONSE}")
 
         if 'data' not in URL_VERIFY_OTP2_RESPONSE or 'access_token' not in URL_VERIFY_OTP2_RESPONSE['data']:
